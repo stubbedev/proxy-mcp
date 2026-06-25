@@ -93,11 +93,24 @@ The proxy aims to be invisible to both sides:
   capabilities onto the same route — clients keep their connection and see a
   `list_changed` when it returns, rather than a permanently dead upstream.
 
-Not bridged: **server→client requests** (`sampling`, `roots`, `elicitation`).
-An aggregating proxy fronts one shared upstream for many clients and terminates
-MCP per hop, so an upstream-initiated request can't be attributed to the
-originating client session. The proxy therefore does not advertise these
-capabilities to upstreams. (Notifications, which broadcast, are unaffected.)
+## Connection modes
+
+Each upstream's `options.mode` controls how connections are shared:
+
+- **`perSession`** (default) — every downstream client gets its **own** upstream
+  connection. This makes the proxy fully transparent, including **server→client
+  requests**: `sampling`, `roots`, and `elicitation` are relayed to the exact
+  client that triggered the call (1:1, no ambiguity). Cost: N clients ⇒ N
+  upstream connections (N backend processes for a stdio upstream).
+- **`shared`** — one upstream connection multiplexed across all clients (a single
+  backend process). Use this for a singleton backend you want exactly one of —
+  e.g. a browser. server→client requests are **not** bridged in this mode: an
+  upstream-initiated request can't be attributed to one of N clients. (Tool
+  calls, notifications, completion, etc. all still work.)
+
+Built on the official [`modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk),
+so server→client requests bridge over **both stdio and streamable-HTTP**
+upstreams.
 
 Check a config without starting the server:
 

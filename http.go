@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -140,11 +140,19 @@ type routeRegistrar struct {
 	tracker     *readinessTracker
 	mux         *http.ServeMux
 	httpServer  *http.Server
-	info        mcp.Implementation
 	basePath    string
 	serverType  MCPServerType
 	activity    *activityTracker
 	idleTimeout time.Duration
+}
+
+// mcpHandler builds the SDK HTTP handler that serves a proxy server.
+func mcpHandler(serverType MCPServerType, srv *mcp.Server) http.Handler {
+	get := func(*http.Request) *mcp.Server { return srv }
+	if serverType == MCPServerTypeSSE {
+		return mcp.NewSSEHandler(get, nil)
+	}
+	return mcp.NewStreamableHTTPHandler(get, nil)
 }
 
 // middlewares builds the per-route chain: recovery always, then optional
@@ -186,11 +194,12 @@ func (r *routeRegistrar) connect(
 
 	mcpRoute := routeForServer(r.basePath, name, r.serverType)
 	log.Printf("<%s> Handling requests at %s", name, mcpRoute)
-	r.mux.Handle(mcpRoute, chainMiddleware(up.srv.handler, r.middlewares(name, clientConfig)...))
+	handler := mcpHandler(r.serverType, up.server)
+	r.mux.Handle(mcpRoute, chainMiddleware(handler, r.middlewares(name, clientConfig)...))
 	r.tracker.setConnected(name)
 	r.httpServer.RegisterOnShutdown(func() {
 		log.Printf("<%s> Shutting down", name)
-		_ = up.close()
+		up.close()
 	})
 	return nil
 }
@@ -255,10 +264,6 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 		Handler:           httpMux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	info := mcp.Implementation{
-		Name: config.McpProxy.Name,
-	}
-
 	// Liveness/readiness probes. Registered on the mux BEFORE the listener
 	// starts so they serve from the first accepted connection. /healthz is
 	// liveness (always 200 once listening); /readyz is readiness — it returns
@@ -274,7 +279,6 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 		tracker:     tracker,
 		mux:         httpMux,
 		httpServer:  httpServer,
-		info:        info,
 		basePath:    baseURL.Path,
 		serverType:  config.McpProxy.Type,
 		activity:    activity,
@@ -287,10 +291,7 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 			tracker.setDisabled(name)
 			continue
 		}
-		up, err := newUpstream(name, config.McpProxy, clientConfig, info)
-		if err != nil {
-			return err
-		}
+		up := newUpstream(name, config.McpProxy, clientConfig)
 		errorGroup.Go(func() error {
 			return registrar.connect(ctx, name, up, clientConfig)
 		})

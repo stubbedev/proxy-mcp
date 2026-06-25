@@ -73,6 +73,22 @@ type OptionsV2 struct {
 	// prompt get, resource read, completion). A Go duration string like "30s";
 	// empty or "0" means no timeout. Invalid values are ignored (logged).
 	CallTimeout string `json:"callTimeout,omitempty"`
+	// Mode selects how upstream connections are shared across downstream clients:
+	//   "perSession" (default) — one dedicated upstream connection per client,
+	//       giving full transparency including server→client requests
+	//       (sampling/roots/elicitation), routed 1:1 to the right client.
+	//   "shared" — a single upstream connection multiplexed across all clients
+	//       (one backend process). Server→client requests are not bridged
+	//       (an upstream request can't be attributed to one of N clients).
+	// Use "shared" for a singleton backend you want exactly one of (e.g. a
+	// browser); use the default for everything else.
+	Mode string `json:"mode,omitempty"`
+}
+
+// perSession reports whether this upstream uses a dedicated connection per
+// downstream client (the default). Only "shared" opts out.
+func (o *OptionsV2) perSession() bool {
+	return o == nil || o.Mode != "shared"
 }
 
 // callTimeout parses CallTimeout into a duration. Returns 0 (no timeout) when
