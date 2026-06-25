@@ -1,0 +1,12 @@
+.direnv/
+.envrc.local
+*.swp
+
+# Go build output
+/bin/
+
+# Stray top-level binary — `just build` emits to ./bin/, never the root.
+/proxy-mcp
+
+# nix build symlink
+/result

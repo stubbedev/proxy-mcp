@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # Go module dependencies (root go.mod).
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    groups:
+      # Batch all non-major bumps into one PR to cut review churn.
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions used in .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch

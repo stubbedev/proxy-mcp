@@ -1,0 +1,125 @@
+version: "2"
+
+# Strict-but-sane lint config. Philosophy:
+#   - `default: all` then disable only linters that fight this codebase's
+#     deliberate idioms, are pure formatting opinion, or are redundant.
+#   - Formatting (imports, gofumpt, long-line wrapping) is delegated to the
+#     `formatters` block below and applied with `golangci-lint fmt`, which is
+#     wired into `just fmt`, the pre-commit hook, and CI so it ALWAYS runs.
+#
+# Run:   golangci-lint run            (lint gate)
+# Fix:   golangci-lint fmt            (apply formatters)
+
+linters:
+  default: all
+  disable:
+    # Whitespace/blank-line reformatters — not adopted (the formatters block
+    # below is the auto-applied formatter stack we do enforce).
+    - wsl
+    - wsl_v5
+    - nlreturn
+    - whitespace
+    # Anti-idiomatic for this codebase's deliberate style.
+    - noinlineerr
+    - exhaustruct
+    - nonamedreturns
+    - err113
+    - wrapcheck
+    - varnamelen
+    - ireturn
+    - gocyclo      # cyclop covers cyclomatic complexity
+    - maintidx     # overlaps cyclop/gocognit
+    - lll          # golines (formatter) enforces line length instead
+    # Heavy-config / convention linters with low bug value here.
+    - depguard
+    - tagliatelle
+    - mnd
+    - paralleltest
+    - testpackage
+    - gochecknoglobals
+    - gochecknoinits
+    - godox
+    - forbidigo
+    - tagalign
+    - godot
+    - godoclint
+    - musttag
+    - contextcheck
+    - containedctx
+    - dupl
+    - gosmopolitan
+    - gomodguard
+    - gomodguard_v2
+    # Opinionated style we intentionally don't adopt.
+    - nilnil
+    - funcorder
+    - goprintffuncname
+    - goconst
+    - recvcheck
+
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    gosec:
+      # This tool spawns user-configured upstream MCP processes and reads
+      # user-chosen config paths by design; the taint/subprocess rules fire
+      # on every such call. Inputs come from the operator's own config file.
+      excludes:
+        - G304  # file path from variable — config path is operator-chosen
+        - G703  # path traversal (taint) — same
+        - G204  # subprocess from variable — upstream commands are operator-chosen
+        - G702  # command injection (taint) — same
+    exhaustive:
+      default-signifies-exhaustive: true
+    cyclop:
+      max-complexity: 20
+    gocognit:
+      min-complexity: 40
+    funlen:
+      lines: 120
+      statements: 80
+    nestif:
+      min-complexity: 8
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-naming
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - noctx
+          - funlen
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    golines:
+      max-len: 140
+    goimports:
+      local-prefixes:
+        - github.com/stubbedev/proxy-mcp
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

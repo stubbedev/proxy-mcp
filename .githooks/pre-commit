@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Pre-commit format gate. Mirrors the strict read-only check CI runs
+# (.github/workflows/ci.yml → "lint" job) so format drift never lands
+# on main.
+#
+# The formatter stack is `golangci-lint fmt` (gofumpt + goimports +
+# golines), configured in .golangci.yml. Auto-fix locally with:
+#   just fmt
+#
+# Enable once per clone:
+#   just install-hooks
+#
+# Skip in an emergency (CI will still block):
+#   git commit --no-verify
+
+set -euo pipefail
+
+if ! command -v golangci-lint >/dev/null 2>&1; then
+    echo "✗ golangci-lint not found on PATH." >&2
+    echo "  Install it, or bypass with: git commit --no-verify" >&2
+    exit 1
+fi
+
+# `golangci-lint fmt --diff` prints the changes it *would* make; empty
+# output means everything is already formatted.
+drift=$(golangci-lint fmt --diff ./... 2>/dev/null)
+if [ -z "$drift" ]; then
+    exit 0
+fi
+
+echo "✗ formatting drift — golangci-lint fmt would rewrite some files:" >&2
+echo >&2
+printf '%s\n' "$drift" >&2
+echo >&2
+echo "Fix with:  just fmt" >&2
+echo "Bypass:    git commit --no-verify" >&2
+exit 1
