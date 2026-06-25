@@ -59,7 +59,45 @@ See `config.json` for a worked example. Minimal shape:
 Each `mcpServers` entry is either stdio (`command` + `args` + `env`) or
 HTTP (`url` + `headers`, optionally `transportType: "streamable-http"`).
 Per-server `options` cover `authTokens`, `logEnabled`, `panicIfInvalid`,
-`disabled`, and a `toolFilter` (`allow`/`block` list).
+`disabled`, a `toolFilter` (`allow`/`block` list), and `callTimeout` (a Go
+duration like `"30s"` bounding each forwarded request — tool call, prompt get,
+resource read, completion — so a hung upstream fails fast; empty/`"0"` disables).
+
+## Transparency
+
+The proxy aims to be invisible to both sides:
+
+- **Header passthrough.** Every header the caller sends is forwarded verbatim to
+  an HTTP/SSE upstream — `Authorization`, `Cookie`, custom `X-*`, all of it. Only
+  the hop-by-hop framing headers (`Connection`, `Host`, `Content-Length`,
+  `Transfer-Encoding`, …) are regenerated for the new hop, exactly as
+  `net/http`/`httputil.ReverseProxy` do. (stdio upstreams have no HTTP hop, so
+  there are no headers to carry.)
+- **Notification relay.** Upstream notifications — progress, logging, resource
+  updates — are forwarded to the connected clients. A streamable upstream is
+  consumed with a continuous listening stream so even unsolicited notifications
+  are seen.
+- **Live `list_changed`.** When an upstream signals tools/prompts/resources
+  `list_changed`, the proxy re-lists and re-registers that capability, then
+  emits one `list_changed` to its clients — so a dynamic upstream tool set stays
+  in sync instead of being frozen at connect time.
+- **Full request forwarding.** Beyond tool calls, prompt gets, and resource
+  reads, the proxy forwards `completion/complete` (argument autocomplete),
+  `resources/subscribe` + `unsubscribe` (so the upstream actually emits
+  `resources/updated`), and `logging/setLevel` to the upstream.
+- **Mixed capability sets.** An upstream may expose any subset — tools-only,
+  prompts-only, completion-only, etc. Missing capabilities are tolerated, not
+  fatal, so the proxy fronts any MCP server.
+- **Auto-reconnect.** If an upstream drops (stdio child crashes, HTTP upstream
+  restarts), the proxy reconnects with exponential backoff and re-syncs its
+  capabilities onto the same route — clients keep their connection and see a
+  `list_changed` when it returns, rather than a permanently dead upstream.
+
+Not bridged: **server→client requests** (`sampling`, `roots`, `elicitation`).
+An aggregating proxy fronts one shared upstream for many clients and terminates
+MCP per hop, so an upstream-initiated request can't be attributed to the
+originating client session. The proxy therefore does not advertise these
+capabilities to upstreams. (Notifications, which broadcast, are unaffected.)
 
 Check a config without starting the server:
 
@@ -102,6 +140,35 @@ This makes the proxy a natural fit for pure socket activation: a systemd
 it shuts itself down when traffic stops — no external idle-watcher process, no
 `socket-proxyd` front. Pair `--idle-timeout=5m` with an `Accept=no` socket unit
 and a `StopWhenUnneeded`/`Restart=` service.
+
+## Socket activation
+
+When started with systemd socket activation (`$LISTEN_FDS`/`$LISTEN_PID` set,
+the conventional first fd at 3), the proxy adopts the passed listening socket
+instead of binding `mcpProxy.addr` itself — so the `.socket` unit owns the port
+and survives across proxy restarts. Crucially, an activated proxy holds off
+`Accept` until readiness: the connection that triggered activation waits in the
+socket backlog through the upstream cold-start, then is served once routes are
+registered, so it never races registration and 404s. Without activation the
+proxy binds `addr` and serves immediately (external callers still gate on
+`/readyz`).
+
+Minimal pair (user units):
+
+```ini
+# proxy-mcp.socket
+[Socket]
+ListenStream=127.0.0.1:9090
+
+[Install]
+WantedBy=sockets.target
+```
+
+```ini
+# proxy-mcp.service  (no [Install]; started by the socket)
+[Service]
+ExecStart=/path/to/proxy-mcp --config %h/.config/proxy-mcp/config.json --idle-timeout=5m
+```
 
 ## Nix
 

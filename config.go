@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log"
 	nethttp "net/http"
 	"strings"
 	"time"
@@ -68,6 +69,24 @@ type OptionsV2 struct {
 	AuthTokens     []string             `json:"authTokens,omitempty"`
 	ToolFilter     *ToolFilterConfig    `json:"toolFilter,omitempty"`
 	Disabled       bool                 `json:"disabled,omitempty"`
+	// CallTimeout bounds each forwarded request to this upstream (tool call,
+	// prompt get, resource read, completion). A Go duration string like "30s";
+	// empty or "0" means no timeout. Invalid values are ignored (logged).
+	CallTimeout string `json:"callTimeout,omitempty"`
+}
+
+// callTimeout parses CallTimeout into a duration. Returns 0 (no timeout) when
+// empty, zero, or malformed.
+func (o *OptionsV2) callTimeout() time.Duration {
+	if o == nil || o.CallTimeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(o.CallTimeout)
+	if err != nil || d < 0 {
+		log.Printf("ignoring invalid callTimeout %q: %v", o.CallTimeout, err)
+		return 0
+	}
+	return d
 }
 
 type MCPProxyConfigV2 struct {

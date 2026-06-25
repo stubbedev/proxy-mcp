@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -90,6 +92,135 @@ func routeForServer(basePath, name string, serverType MCPServerType) string {
 	return route + "/"
 }
 
+// buildListener returns the proxy's listener. Under systemd socket activation
+// it adopts the passed-in socket (LISTEN_FDS) and reports activated=true;
+// otherwise it binds addr itself. Adopting the socket lets a `.socket` unit own
+// the port and start the proxy on demand, exiting (see --idle-timeout) when
+// quiet without dropping the port.
+func buildListener(ctx context.Context, addr string) (net.Listener, bool, error) {
+	if ln := systemdListener(); ln != nil {
+		return ln, true, nil
+	}
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", addr)
+	return ln, false, err
+}
+
+// systemdListener adopts the first systemd socket-activation fd when this
+// process is the activation target (LISTEN_PID == pid and LISTEN_FDS >= 1),
+// else nil. A minimal sd_listen_fds(3): the first passed fd is
+// SD_LISTEN_FDS_START (3). net.FileListener dups the fd, so the os.File is
+// closed afterwards.
+func systemdListener() net.Listener {
+	if os.Getenv("LISTEN_PID") != strconv.Itoa(os.Getpid()) {
+		return nil
+	}
+	n, err := strconv.Atoi(os.Getenv("LISTEN_FDS"))
+	if err != nil || n < 1 {
+		return nil
+	}
+	const sdListenFdsStart = 3
+	f := os.NewFile(uintptr(sdListenFdsStart), "systemd-activation-socket")
+	if f == nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	ln, err := net.FileListener(f)
+	if err != nil {
+		log.Printf("socket activation: adopting LISTEN_FDS failed: %v", err)
+		return nil
+	}
+	log.Printf("socket activation: adopted listener on %s", ln.Addr())
+	return ln
+}
+
+// routeRegistrar bundles the shared state needed to connect an upstream and
+// mount its route, keeping startHTTPServer's per-upstream goroutine small.
+type routeRegistrar struct {
+	tracker     *readinessTracker
+	mux         *http.ServeMux
+	httpServer  *http.Server
+	info        mcp.Implementation
+	basePath    string
+	serverType  MCPServerType
+	activity    *activityTracker
+	idleTimeout time.Duration
+}
+
+// middlewares builds the per-route chain: recovery always, then optional
+// request logging, auth, and (when idle-exit is on) activity tracking.
+func (r *routeRegistrar) middlewares(name string, clientConfig *MCPClientConfigV2) []MiddlewareFunc {
+	mws := []MiddlewareFunc{recoverMiddleware(name)}
+	if clientConfig.Options.LogEnabled.OrElse(false) {
+		mws = append(mws, loggerMiddleware(name))
+	}
+	if len(clientConfig.Options.AuthTokens) > 0 {
+		mws = append(mws, newAuthMiddleware(clientConfig.Options.AuthTokens))
+	}
+	if r.idleTimeout > 0 {
+		mws = append(mws, r.activity.middleware())
+	}
+	return mws
+}
+
+// connect dials the upstream and, on success, mounts its route and records it
+// ready. It returns an error only when the upstream sets PanicIfInvalid; a
+// plain connect failure is logged, marked failed, and tolerated (degraded).
+// After a successful first connect the upstream auto-reconnects on later drops.
+func (r *routeRegistrar) connect(
+	ctx context.Context,
+	name string,
+	up *upstream,
+	clientConfig *MCPClientConfigV2,
+) error {
+	log.Printf("<%s> Connecting", name)
+	if cErr := up.connect(ctx); cErr != nil {
+		log.Printf("<%s> Failed to connect upstream: %v", name, cErr)
+		r.tracker.setFailed(name, cErr)
+		if clientConfig.Options.PanicIfInvalid.OrElse(false) {
+			return cErr
+		}
+		return nil
+	}
+	log.Printf("<%s> Connected", name)
+
+	mcpRoute := routeForServer(r.basePath, name, r.serverType)
+	log.Printf("<%s> Handling requests at %s", name, mcpRoute)
+	r.mux.Handle(mcpRoute, chainMiddleware(up.srv.handler, r.middlewares(name, clientConfig)...))
+	r.tracker.setConnected(name)
+	r.httpServer.RegisterOnShutdown(func() {
+		log.Printf("<%s> Shutting down", name)
+		_ = up.close()
+	})
+	return nil
+}
+
+// serveHTTP runs the HTTP server on listener. When socket-activated it waits
+// for readyCh (route registration complete) before accepting, so the queued
+// client doesn't race route registration; when self-bound it serves at once
+// (/readyz already gates external callers). Blocks until the server stops.
+func serveHTTP(
+	ctx context.Context,
+	httpServer *http.Server,
+	listener net.Listener,
+	activated bool,
+	readyCh <-chan struct{},
+	serverType MCPServerType,
+) {
+	if activated {
+		select {
+		case <-readyCh:
+		case <-ctx.Done():
+			return
+		}
+	}
+	log.Printf("Starting %s server", serverType)
+	log.Printf("%s server listening on %s", serverType, listener.Addr())
+	if hErr := httpServer.Serve(listener); hErr != nil && !errors.Is(hErr, http.ErrServerClosed) {
+		log.Fatalf("Failed to start server: %v", hErr)
+	}
+}
+
 func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 	baseURL, uErr := url.Parse(config.McpProxy.BaseURL)
 	if uErr != nil {
@@ -105,6 +236,17 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 	activity := newActivityTracker()
 	idleShutdown := make(chan struct{})
 	var idleOnce sync.Once
+
+	// readyCh closes once every upstream route is registered (signalReady).
+	// Under socket activation we hold off Serve until then, so the activating
+	// client's connection waits in the socket backlog through the upstream
+	// cold-start instead of racing route registration and 404ing.
+	readyCh := make(chan struct{})
+
+	listener, activated, lErr := buildListener(ctx, config.McpProxy.Addr)
+	if lErr != nil {
+		return lErr
+	}
 
 	var errorGroup errgroup.Group
 	httpMux := http.NewServeMux()
@@ -128,53 +270,29 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 	tracker := newReadinessTracker()
 	tracker.registerProbes(httpMux)
 
+	registrar := &routeRegistrar{
+		tracker:     tracker,
+		mux:         httpMux,
+		httpServer:  httpServer,
+		info:        info,
+		basePath:    baseURL.Path,
+		serverType:  config.McpProxy.Type,
+		activity:    activity,
+		idleTimeout: idleTimeout,
+	}
+
 	for name, clientConfig := range config.McpServers {
 		if clientConfig.Options.Disabled {
 			log.Printf("<%s> Disabled", name)
 			tracker.setDisabled(name)
 			continue
 		}
-		mcpClient, err := newMCPClient(name, clientConfig)
-		if err != nil {
-			return err
-		}
-		server, err := newMCPServer(name, config.McpProxy, clientConfig)
+		up, err := newUpstream(name, config.McpProxy, clientConfig, info)
 		if err != nil {
 			return err
 		}
 		errorGroup.Go(func() error {
-			log.Printf("<%s> Connecting", name)
-			addErr := mcpClient.addToMCPServer(ctx, info, server.mcpServer)
-			if addErr != nil {
-				log.Printf("<%s> Failed to add client to server: %v", name, addErr)
-				tracker.setFailed(name, addErr)
-				if clientConfig.Options.PanicIfInvalid.OrElse(false) {
-					return addErr
-				}
-				return nil
-			}
-			log.Printf("<%s> Connected", name)
-
-			middlewares := make([]MiddlewareFunc, 0)
-			middlewares = append(middlewares, recoverMiddleware(name))
-			if clientConfig.Options.LogEnabled.OrElse(false) {
-				middlewares = append(middlewares, loggerMiddleware(name))
-			}
-			if len(clientConfig.Options.AuthTokens) > 0 {
-				middlewares = append(middlewares, newAuthMiddleware(clientConfig.Options.AuthTokens))
-			}
-			if idleTimeout > 0 {
-				middlewares = append(middlewares, activity.middleware())
-			}
-			mcpRoute := routeForServer(baseURL.Path, name, config.McpProxy.Type)
-			log.Printf("<%s> Handling requests at %s", name, mcpRoute)
-			httpMux.Handle(mcpRoute, chainMiddleware(server.handler, middlewares...))
-			tracker.setConnected(name)
-			httpServer.RegisterOnShutdown(func() {
-				log.Printf("<%s> Shutting down", name)
-				_ = mcpClient.Close()
-			})
-			return nil
+			return registrar.connect(ctx, name, up, clientConfig)
 		})
 	}
 
@@ -190,6 +308,7 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 		// unit only reaches `active` now (never mid-startup), and start the
 		// watchdog keepalive if the unit set WatchdogSec.
 		tracker.signalReady(ctx)
+		close(readyCh)
 		// Seed the idle clock at readiness (not boot) so a slow upstream
 		// cold-start isn't counted against the idle window, then watch for quiet.
 		activity.monitorIdle(ctx, idleTimeout, func() {
@@ -197,14 +316,7 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 		})
 	}()
 
-	go func() {
-		log.Printf("Starting %s server", config.McpProxy.Type)
-		log.Printf("%s server listening on %s", config.McpProxy.Type, config.McpProxy.Addr)
-		hErr := httpServer.ListenAndServe()
-		if hErr != nil && !errors.Is(hErr, http.ErrServerClosed) {
-			log.Fatalf("Failed to start server: %v", hErr)
-		}
-	}()
+	go serveHTTP(ctx, httpServer, listener, activated, readyCh, config.McpProxy.Type)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
