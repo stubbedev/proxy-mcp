@@ -115,6 +115,12 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
       - uses: docker/build-push-action@v6
+        # Suppress the `*.dockerbuild` build-record artifact + job summary —
+        # otherwise the publish job's download-artifact pulls that opaque blob
+        # alongside the release tarballs and chokes on it.
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+          DOCKER_BUILD_SUMMARY: "false"
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -132,6 +138,9 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          # Only the per-arch build artifacts (goos-goarch); never any stray
+          # artifact a sibling job might upload.
+          pattern: "*-*"
           merge-multiple: true
       - run: ls -la dist/
       - uses: softprops/action-gh-release@v3
