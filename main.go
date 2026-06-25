@@ -1,28 +1,26 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
+
+	flag "github.com/spf13/pflag"
 )
 
 var BuildVersion = "dev"
 
 func main() {
-	conf := flag.String("config", "config.json", "path to config file or a http(s) url")
-	insecure := flag.Bool("insecure", false, "allow insecure HTTPS connections by skipping TLS certificate verification")
-	expandEnv := flag.Bool("expand-env", true, "expand environment variables in config file")
-	httpHeaders := flag.String("http-headers", "", "optional HTTP headers for config URL, format: 'Key1:Value1;Key2:Value2'")
-	httpTimeout := flag.Int("http-timeout", 10, "HTTP timeout in seconds when fetching config from URL")
-
-	validate := flag.Bool("validate", false, "load and validate the config, then exit (0 ok, 1 invalid) without starting the server")
-	version := flag.Bool("version", false, "print version and exit")
-	help := flag.Bool("help", false, "print help and exit")
+	// GNU-style flags: every flag has a `--long` form and most a `-short`
+	// alias. pflag provides `-h`/`--help` automatically.
+	conf := flag.StringP("config", "c", "config.json", "path to config file or a http(s) url")
+	insecure := flag.BoolP("insecure", "k", false, "allow insecure HTTPS connections by skipping TLS certificate verification")
+	expandEnv := flag.BoolP("expand-env", "e", true, "expand environment variables in the config file")
+	httpHeaders := flag.StringP("http-headers", "H", "", "HTTP headers for the config URL, format: 'Key1:Value1;Key2:Value2'")
+	httpTimeout := flag.IntP("http-timeout", "t", 10, "HTTP timeout in seconds when fetching config from a URL")
+	validate := flag.BoolP("validate", "V", false, "load and validate the config, then exit (0 ok, 1 invalid) without starting the server")
+	version := flag.BoolP("version", "v", false, "print version and exit")
 	flag.Parse()
-	if *help {
-		flag.Usage()
-		return
-	}
+
 	if *version {
 		fmt.Println(BuildVersion)
 		return

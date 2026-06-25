@@ -20,11 +20,21 @@ nix build .#proxy-mcp
 ## Run
 
 ```sh
-proxy-mcp -config config.json
+proxy-mcp --config config.json   # or: -c config.json
 ```
 
-Flags: `-config` (file path or http(s) URL), `-insecure`, `-expand-env`,
-`-http-headers`, `-http-timeout`, `-version`, `-help`.
+GNU-style flags (each has a `--long` form; most a short alias):
+
+| Flag | Short | Default | Meaning |
+| --- | --- | --- | --- |
+| `--config` | `-c` | `config.json` | config file path or http(s) URL |
+| `--insecure` | `-k` | `false` | skip TLS verification for the config URL |
+| `--expand-env` | `-e` | `true` | expand `$VARS` in the config |
+| `--http-headers` | `-H` | — | headers for the config URL (`'K1:V1;K2:V2'`) |
+| `--http-timeout` | `-t` | `10` | config-URL fetch timeout (seconds) |
+| `--validate` | `-V` | `false` | validate config and exit (no server) |
+| `--version` | `-v` | | print version and exit |
+| `--help` | `-h` | | print usage and exit |
 
 ## Configuration
 
@@ -53,7 +63,7 @@ Per-server `options` cover `authTokens`, `logEnabled`, `panicIfInvalid`,
 Check a config without starting the server:
 
 ```sh
-proxy-mcp -validate -config config.json   # exits 0 if valid, 1 otherwise
+proxy-mcp --validate --config config.json   # exits 0 if valid, 1 otherwise
 ```
 
 ## Readiness

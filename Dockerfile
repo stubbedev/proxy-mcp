@@ -20,4 +20,4 @@ RUN apk add --no-cache ca-certificates
 COPY --from=build /out/proxy-mcp /usr/local/bin/proxy-mcp
 EXPOSE 9090
 ENTRYPOINT ["proxy-mcp"]
-CMD ["-config", "/config.json"]
+CMD ["--config", "/config.json"]

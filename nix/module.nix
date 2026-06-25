@@ -20,9 +20,9 @@ let
   execStart = lib.concatStringsSep " " (
     [
       (lib.getExe cfg.package)
-      "-config"
+      "--config"
       "${configFile}"
-      "-expand-env=${lib.boolToString cfg.expandEnv}"
+      "--expand-env=${lib.boolToString cfg.expandEnv}"
     ]
     ++ cfg.extraArgs
   );
@@ -78,7 +78,7 @@ in
     expandEnv = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Expand environment variables in the config file (-expand-env).";
+      description = "Expand environment variables in the config file (--expand-env).";
     };
 
     environmentFile = lib.mkOption {
@@ -98,7 +98,7 @@ in
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "-insecure" ];
+      example = [ "--insecure" ];
       description = "Extra command-line arguments passed to proxy-mcp.";
     };
   };

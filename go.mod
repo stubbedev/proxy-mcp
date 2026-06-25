@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/go-sphere/confstore v0.0.4
 	github.com/mark3labs/mcp-go v0.55.1
+	github.com/spf13/pflag v1.0.10
 	github.com/tbxark/optional-go v0.0.2
 	golang.org/x/sync v0.21.0
 )
