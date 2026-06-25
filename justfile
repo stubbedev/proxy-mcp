@@ -175,10 +175,18 @@ _release-checks:
     #!/usr/bin/env bash
     set -euo pipefail
     BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    # origin/HEAD is unset on a fresh clone, in which case `rev-parse` prints
+    # a bare "HEAD". Try to populate it from the remote, then fall back to
+    # parsing `git remote show`, then to "master".
     DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
-    if [ -z "${DEFAULT_BRANCH:-}" ]; then
-        DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo master)
+    if [ -z "${DEFAULT_BRANCH:-}" ] || [ "$DEFAULT_BRANCH" = "HEAD" ]; then
+        git remote set-head origin -a >/dev/null 2>&1 || true
+        DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
     fi
+    if [ -z "${DEFAULT_BRANCH:-}" ] || [ "$DEFAULT_BRANCH" = "HEAD" ]; then
+        DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || true)
+    fi
+    DEFAULT_BRANCH=${DEFAULT_BRANCH:-master}
     if [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
         echo "Error: not on default branch '$DEFAULT_BRANCH' (currently '$BRANCH')." >&2
         exit 1

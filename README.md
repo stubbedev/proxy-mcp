@@ -50,24 +50,73 @@ HTTP (`url` + `headers`, optionally `transportType: "streamable-http"`).
 Per-server `options` cover `authTokens`, `logEnabled`, `panicIfInvalid`,
 `disabled`, and a `toolFilter` (`allow`/`block` list).
 
+Check a config without starting the server:
+
+```sh
+proxy-mcp -validate -config config.json   # exits 0 if valid, 1 otherwise
+```
+
 ## Readiness
 
 The proxy binds its listener and registers each `/<name>/` route
 asynchronously as upstreams connect. To avoid serving before routes exist,
-three readiness signals fire **once**, only after every enabled upstream is
-connected and its route is registered:
+the readiness gate flips **once**, only after every enabled upstream is
+resolved and its route registered:
 
 | Signal | Behaviour |
 | --- | --- |
-| `GET /readyz` | `503 starting` until ready, then `200 ok`. |
-| `GET /healthz` | `200 ok` once the server is listening (liveness). |
-| systemd `sd_notify` | `READY=1` sent to `$NOTIFY_SOCKET` (no-op when unset). |
-| log line | `proxy ready: N routes registered` (stable, greppable). |
+| `GET /readyz` | `503` until ready, then `200`. JSON body: `{ready, degraded, upstreams}` with per-upstream `connected`/`failed`/`disabled` state. |
+| `GET /healthz` | `200 {"status":"ok"}` once listening (liveness). |
+| systemd `sd_notify` | `READY=1` to `$NOTIFY_SOCKET` (no-op when unset). |
+| systemd watchdog | pings `WATCHDOG=1` at half `$WATCHDOG_USEC` when the unit sets `WatchdogSec`. |
+| log line | `proxy ready: N upstreams connected, degraded=…` (stable, greppable). |
+
+`degraded` is `true` when some upstream failed to connect but the proxy is
+still serving the ones that did (only happens when `panicIfInvalid` is false).
 
 Under systemd, run it as a `Type=notify` unit — the unit reaches
 `active (running)` only after readiness, so any `After=`/`Requires=` dependent
 never races a not-yet-registered route. For orchestrators without systemd,
 gate on `GET /readyz`.
+
+## Nix
+
+The flake exposes a package, an overlay, and NixOS + home-manager modules. The
+module runs proxy-mcp as a `Type=notify` service wired to the readiness gate:
+
+```nix
+# flake.nix inputs: proxy-mcp.url = "github:stubbedev/proxy-mcp";
+
+# NixOS
+imports = [ proxy-mcp.nixosModules.default ];
+services.proxy-mcp = {
+  enable = true;
+  watchdogSec = "30s";                       # optional; restarts if wedged
+  settings = {
+    mcpProxy.addr = ":9090";
+    mcpProxy.baseURL = "http://localhost:9090";
+    mcpProxy.name = "proxy-mcp";
+    mcpProxy.type = "streamable-http";
+    mcpServers.fetch = { command = "uvx"; args = [ "mcp-server-fetch" ]; };
+  };
+  # environmentFile = "/run/secrets/proxy-mcp.env";  # for $TOKEN-style secrets
+};
+```
+
+`homeModules.default` exposes the same `services.proxy-mcp` options as a
+`systemd --user` service. Prebuilt closures are pushed to the
+`nix.stubbe.dev` (`default`) attic cache on every master push + release tag.
+
+## Docker
+
+```sh
+docker run --rm -v $PWD/config.json:/config.json:ro -p 9090:9090 \
+  ghcr.io/stubbedev/proxy-mcp:latest
+```
+
+Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GHCR on each
+release tag. The base is alpine — derive from it to add stdio upstream
+runtimes (`npx`, `uvx`, …).
 
 ## Development
 

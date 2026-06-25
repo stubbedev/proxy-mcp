@@ -1,0 +1,8 @@
+.git
+bin/
+result
+*.tar.gz
+.direnv/
+.github/
+docs/
+*_test.go
