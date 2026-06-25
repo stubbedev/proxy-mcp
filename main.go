@@ -15,6 +15,7 @@ func main() {
 	httpHeaders := flag.String("http-headers", "", "optional HTTP headers for config URL, format: 'Key1:Value1;Key2:Value2'")
 	httpTimeout := flag.Int("http-timeout", 10, "HTTP timeout in seconds when fetching config from URL")
 
+	validate := flag.Bool("validate", false, "load and validate the config, then exit (0 ok, 1 invalid) without starting the server")
 	version := flag.Bool("version", false, "print version and exit")
 	help := flag.Bool("help", false, "print help and exit")
 	flag.Parse()
@@ -29,6 +30,13 @@ func main() {
 	config, err := load(*conf, *insecure, *expandEnv, *httpHeaders, *httpTimeout)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+	if *validate {
+		if vErr := validateConfig(config); vErr != nil {
+			log.Fatalf("Config invalid: %v", vErr)
+		}
+		fmt.Printf("config ok: %d server(s)\n", len(config.McpServers))
+		return
 	}
 	err = startHTTPServer(config)
 	if err != nil {

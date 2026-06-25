@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	nethttp "net/http"
 	"strings"
 	"time"
@@ -238,4 +239,25 @@ func load(path string, insecure, expandEnv bool, httpHeaders string, httpTimeout
 		McpProxy:   conf.McpProxy,
 		McpServers: conf.McpServers,
 	}, nil
+}
+
+// validateConfig checks a loaded config for problems that load() doesn't catch
+// on its own: the proxy server type must be known, and every (enabled) upstream
+// must resolve to a valid stdio/sse/streamable client config. Returns the first
+// error found, or nil. Used by the -validate flag.
+func validateConfig(config *Config) error {
+	switch config.McpProxy.Type {
+	case MCPServerTypeSSE, MCPServerTypeStreamable:
+	default:
+		return fmt.Errorf("unknown mcpProxy.type: %q", config.McpProxy.Type)
+	}
+	for name, clientConfig := range config.McpServers {
+		if clientConfig.Options != nil && clientConfig.Options.Disabled {
+			continue
+		}
+		if _, err := parseMCPClientConfigV2(clientConfig); err != nil {
+			return fmt.Errorf("server %q: %w", name, err)
+		}
+	}
+	return nil
 }

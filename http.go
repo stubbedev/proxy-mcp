@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"path"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -98,17 +97,18 @@ func startHTTPServer(config *Config) error {
 	// Liveness/readiness probes. Registered on the mux BEFORE the listener
 	// starts so they serve from the first accepted connection. /healthz is
 	// liveness (always 200 once listening); /readyz is readiness — it returns
-	// 503 until every upstream is connected and its /<name>/ route is
-	// registered, then 200. Upstream mcp-proxy binds the port and registers
-	// routes asynchronously, so without this gate a client's first request can
-	// race ahead of route registration and hit a 404. See signalReady.
-	registerReadinessProbes(httpMux)
-
-	var routeCount atomic.Int64
+	// 503 until every upstream is resolved and its /<name>/ route is
+	// registered, then 200, with per-upstream state in the JSON body. Upstream
+	// mcp-proxy binds the port and registers routes asynchronously, so without
+	// this gate a client's first request can race ahead of route registration
+	// and hit a 404. See readinessTracker.
+	tracker := newReadinessTracker()
+	tracker.registerProbes(httpMux)
 
 	for name, clientConfig := range config.McpServers {
 		if clientConfig.Options.Disabled {
 			log.Printf("<%s> Disabled", name)
+			tracker.setDisabled(name)
 			continue
 		}
 		mcpClient, err := newMCPClient(name, clientConfig)
@@ -124,6 +124,7 @@ func startHTTPServer(config *Config) error {
 			addErr := mcpClient.addToMCPServer(ctx, info, server.mcpServer)
 			if addErr != nil {
 				log.Printf("<%s> Failed to add client to server: %v", name, addErr)
+				tracker.setFailed(name, addErr)
 				if clientConfig.Options.PanicIfInvalid.OrElse(false) {
 					return addErr
 				}
@@ -148,7 +149,7 @@ func startHTTPServer(config *Config) error {
 			}
 			log.Printf("<%s> Handling requests at %s", name, mcpRoute)
 			httpMux.Handle(mcpRoute, chainMiddleware(server.handler, middlewares...))
-			routeCount.Add(1)
+			tracker.setConnected(name)
 			httpServer.RegisterOnShutdown(func() {
 				log.Printf("<%s> Shutting down", name)
 				_ = mcpClient.Close()
@@ -163,11 +164,12 @@ func startHTTPServer(config *Config) error {
 			log.Fatalf("Failed to add clients: %v", err)
 		}
 		log.Printf("All clients initialized")
-		// Every upstream is connected and every /<name>/ route is now
+		// Every upstream is resolved and every successful /<name>/ route is now
 		// registered on the mux. Flip the readiness gate, log the stable
-		// "proxy ready" line, and fire systemd sd_notify(READY=1) so a
-		// Type=notify unit only reaches `active` now — never mid-startup.
-		signalReady(int(routeCount.Load()))
+		// "proxy ready" line, fire systemd sd_notify(READY=1) so a Type=notify
+		// unit only reaches `active` now (never mid-startup), and start the
+		// watchdog keepalive if the unit set WatchdogSec.
+		tracker.signalReady(ctx)
 	}()
 
 	go func() {
