@@ -74,6 +74,21 @@ func recoverMiddleware(prefix string) MiddlewareFunc {
 	}
 }
 
+// routeForServer returns the ServeMux pattern an upstream mounts at, under the
+// optional baseURL path. A streamable-HTTP upstream mounts at an explicit
+// `/<base>/<name>/mcp` endpoint — the conventional streamable-HTTP path, and a
+// drop-in match for TBXark/mcp-proxy clients — so a client URL of
+// `/<name>/mcp` hits a registered route rather than relying on subtree
+// fall-through. An SSE upstream mounts at the `/<base>/<name>/` subtree because
+// its server serves both `/sse` and `/message` beneath that base.
+func routeForServer(basePath, name string, serverType MCPServerType) string {
+	route := path.Join("/", basePath, name)
+	if serverType == MCPServerTypeStreamable {
+		return route + "/mcp"
+	}
+	return route + "/"
+}
+
 func startHTTPServer(config *Config) error {
 	baseURL, uErr := url.Parse(config.McpProxy.BaseURL)
 	if uErr != nil {
@@ -140,13 +155,7 @@ func startHTTPServer(config *Config) error {
 			if len(clientConfig.Options.AuthTokens) > 0 {
 				middlewares = append(middlewares, newAuthMiddleware(clientConfig.Options.AuthTokens))
 			}
-			mcpRoute := path.Join(baseURL.Path, name)
-			if !strings.HasPrefix(mcpRoute, "/") {
-				mcpRoute = "/" + mcpRoute
-			}
-			if !strings.HasSuffix(mcpRoute, "/") {
-				mcpRoute += "/"
-			}
+			mcpRoute := routeForServer(baseURL.Path, name, config.McpProxy.Type)
 			log.Printf("<%s> Handling requests at %s", name, mcpRoute)
 			httpMux.Handle(mcpRoute, chainMiddleware(server.handler, middlewares...))
 			tracker.setConnected(name)
