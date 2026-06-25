@@ -1,6 +1,6 @@
 module github.com/stubbedev/proxy-mcp
 
-go 1.25.5
+go 1.26.3
 
 require (
 	github.com/go-sphere/confstore v0.0.4
