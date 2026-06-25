@@ -1,7 +1,7 @@
 # Multi-arch build. buildx sets BUILDPLATFORM (where we compile) and
 # TARGETOS/TARGETARCH (what we compile for); cross-compiling in the build
 # stage is far faster than emulating the whole toolchain under QEMU.
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
