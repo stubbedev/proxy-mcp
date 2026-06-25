@@ -13,7 +13,7 @@
 
         proxy-mcp = pkgs.buildGoModule {
           pname = "proxy-mcp";
-          version = "0.0.0";
+          version = "0.0.1";
           src = ./.;
           # buildGoModule fetches Go deps through the module proxy and
           # hashes the resulting vendor tree; `vendorHash` pins that hash
@@ -26,7 +26,7 @@
           ldflags = [
             "-s"
             "-w"
-            "-X main.BuildVersion=0.0.0"
+            "-X main.BuildVersion=0.0.1"
           ];
           doCheck = true;
         };
