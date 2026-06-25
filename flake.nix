@@ -14,7 +14,7 @@
       # by regex, so keep them on their own lines.
       mkProxyMcp = pkgs: pkgs.buildGoModule {
         pname = "proxy-mcp";
-        version = "0.0.6";
+        version = "0.0.7";
         src = ./.;
         # buildGoModule fetches Go deps through the module proxy and hashes the
         # resulting vendor tree; `vendorHash` pins that hash so the sandboxed
@@ -26,7 +26,7 @@
         ldflags = [
           "-s"
           "-w"
-          "-X main.BuildVersion=0.0.6"
+          "-X main.BuildVersion=0.0.7"
         ];
         doCheck = true;
         meta = {
