@@ -1,0 +1,76 @@
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"sync/atomic"
+	"time"
+)
+
+// activityTracker records the time of the last proxied request so an idle
+// monitor can shut the proxy down after a quiet period. This lets the proxy be
+// driven by pure socket activation (e.g. systemd .socket): start on the first
+// connection, exit once traffic stops, with no external idle-watcher process.
+//
+// Probe traffic (/healthz, /readyz) deliberately does NOT touch the tracker —
+// those are registered straight on the mux, never wrapped by middleware() — so
+// an orchestrator polling readiness can't keep the proxy alive forever.
+type activityTracker struct {
+	lastNano atomic.Int64
+}
+
+func newActivityTracker() *activityTracker {
+	t := &activityTracker{}
+	t.touch()
+	return t
+}
+
+// touch marks "now" as the most recent activity.
+func (t *activityTracker) touch() { t.lastNano.Store(time.Now().UnixNano()) }
+
+// idleFor reports how long it has been since the last touch.
+func (t *activityTracker) idleFor() time.Duration {
+	return time.Duration(time.Now().UnixNano() - t.lastNano.Load())
+}
+
+// middleware records activity on every request that reaches an upstream route.
+// Placed outermost in the chain so any contact with a mounted server counts,
+// including requests later rejected by auth.
+func (t *activityTracker) middleware() MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.touch()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// monitorIdle calls onIdle exactly once, after the proxy has gone idleTimeout
+// without a proxied request. It (re)seeds the activity clock to now — call it
+// after readiness so the upstream cold-start window isn't counted as idle —
+// then polls at a quarter of the timeout (floored at 100ms). It stops when ctx
+// is cancelled. A no-op when idleTimeout <= 0.
+func (t *activityTracker) monitorIdle(ctx context.Context, idleTimeout time.Duration, onIdle func()) {
+	if idleTimeout <= 0 {
+		return
+	}
+	t.touch()
+	interval := max(idleTimeout/4, 100*time.Millisecond)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if idle := t.idleFor(); idle >= idleTimeout {
+					log.Printf("idle for %s (>= %s), shutting down", idle.Round(time.Second), idleTimeout)
+					onIdle()
+					return
+				}
+			}
+		}
+	}()
+}

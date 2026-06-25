@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -89,7 +90,7 @@ func routeForServer(basePath, name string, serverType MCPServerType) string {
 	return route + "/"
 }
 
-func startHTTPServer(config *Config) error {
+func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 	baseURL, uErr := url.Parse(config.McpProxy.BaseURL)
 	if uErr != nil {
 		return uErr
@@ -97,6 +98,13 @@ func startHTTPServer(config *Config) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Optional idle auto-shutdown: track per-route activity and, once ready,
+	// exit after idleTimeout of silence. Lets pure socket activation own the
+	// lifecycle (start on connect, exit when quiet). Disabled when <= 0.
+	activity := newActivityTracker()
+	idleShutdown := make(chan struct{})
+	var idleOnce sync.Once
 
 	var errorGroup errgroup.Group
 	httpMux := http.NewServeMux()
@@ -155,6 +163,9 @@ func startHTTPServer(config *Config) error {
 			if len(clientConfig.Options.AuthTokens) > 0 {
 				middlewares = append(middlewares, newAuthMiddleware(clientConfig.Options.AuthTokens))
 			}
+			if idleTimeout > 0 {
+				middlewares = append(middlewares, activity.middleware())
+			}
 			mcpRoute := routeForServer(baseURL.Path, name, config.McpProxy.Type)
 			log.Printf("<%s> Handling requests at %s", name, mcpRoute)
 			httpMux.Handle(mcpRoute, chainMiddleware(server.handler, middlewares...))
@@ -179,6 +190,11 @@ func startHTTPServer(config *Config) error {
 		// unit only reaches `active` now (never mid-startup), and start the
 		// watchdog keepalive if the unit set WatchdogSec.
 		tracker.signalReady(ctx)
+		// Seed the idle clock at readiness (not boot) so a slow upstream
+		// cold-start isn't counted against the idle window, then watch for quiet.
+		activity.monitorIdle(ctx, idleTimeout, func() {
+			idleOnce.Do(func() { close(idleShutdown) })
+		})
 	}()
 
 	go func() {
@@ -193,8 +209,12 @@ func startHTTPServer(config *Config) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	<-sigChan
-	log.Println("Shutdown signal received")
+	select {
+	case <-sigChan:
+		log.Println("Shutdown signal received")
+	case <-idleShutdown:
+		// monitorIdle already logged the reason.
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer shutdownCancel()

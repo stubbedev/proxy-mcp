@@ -33,6 +33,7 @@ GNU-style flags (each has a `--long` form; most a short alias):
 | `--http-headers` | `-H` | — | headers for the config URL (`'K1:V1;K2:V2'`) |
 | `--http-timeout` | `-t` | `10` | config-URL fetch timeout (seconds) |
 | `--validate` | `-V` | `false` | validate config and exit (no server) |
+| `--idle-timeout` | `-i` | `0` | exit after this much idle time with no proxied requests (e.g. `5m`); `0` disables |
 | `--version` | `-v` | | print version and exit |
 | `--help` | `-h` | | print usage and exit |
 
@@ -88,6 +89,19 @@ Under systemd, run it as a `Type=notify` unit — the unit reaches
 `active (running)` only after readiness, so any `After=`/`Requires=` dependent
 never races a not-yet-registered route. For orchestrators without systemd,
 gate on `GET /readyz`.
+
+## Idle auto-shutdown
+
+With `--idle-timeout` set, the proxy exits cleanly once it has gone that long
+without a proxied request (counted from readiness, so a slow upstream cold-start
+isn't held against the window). Probe traffic to `/healthz` and `/readyz` does
+**not** count as activity, so a readiness poller can't keep it alive.
+
+This makes the proxy a natural fit for pure socket activation: a systemd
+`.socket` (or any inetd-style activator) starts it on the first connection, and
+it shuts itself down when traffic stops — no external idle-watcher process, no
+`socket-proxyd` front. Pair `--idle-timeout=5m` with an `Accept=no` socket unit
+and a `StopWhenUnneeded`/`Restart=` service.
 
 ## Nix
 

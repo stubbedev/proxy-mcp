@@ -18,6 +18,7 @@ func main() {
 	httpHeaders := flag.StringP("http-headers", "H", "", "HTTP headers for the config URL, format: 'Key1:Value1;Key2:Value2'")
 	httpTimeout := flag.IntP("http-timeout", "t", 10, "HTTP timeout in seconds when fetching config from a URL")
 	validate := flag.BoolP("validate", "V", false, "load and validate the config, then exit (0 ok, 1 invalid) without starting the server")
+	idleTimeout := flag.DurationP("idle-timeout", "i", 0, "exit after this much idle time with no proxied requests (e.g. 5m); 0 disables")
 	version := flag.BoolP("version", "v", false, "print version and exit")
 	flag.Parse()
 
@@ -36,7 +37,7 @@ func main() {
 		fmt.Printf("config ok: %d server(s)\n", len(config.McpServers))
 		return
 	}
-	err = startHTTPServer(config)
+	err = startHTTPServer(config, *idleTimeout)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

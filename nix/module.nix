@@ -24,6 +24,7 @@ let
       "${configFile}"
       "--expand-env=${lib.boolToString cfg.expandEnv}"
     ]
+    ++ lib.optional (cfg.idleTimeout != null) "--idle-timeout=${cfg.idleTimeout}"
     ++ cfg.extraArgs
   );
 
@@ -93,6 +94,17 @@ in
       default = null;
       example = "30s";
       description = "systemd WatchdogSec. proxy-mcp pings WATCHDOG=1 automatically.";
+    };
+
+    idleTimeout = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "5m";
+      description = ''
+        Pass --idle-timeout: exit after this much idle time with no proxied
+        requests (a Go duration like "5m"). Null omits the flag (no idle exit).
+        Pair with socket activation to start on demand and stop when quiet.
+      '';
     };
 
     extraArgs = lib.mkOption {
