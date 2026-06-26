@@ -180,7 +180,7 @@ below across stdio, SSE, and streamable-HTTP upstreams.
 | `toolFilter` | object | — | `{ "mode": "allow" \| "block", "list": [...] }`. `allow` exposes only listed tools; `block` hides them. |
 | `callTimeout` | duration | `0` | Bounds each forwarded request (tool call, prompt get, resource read, completion) so a hung upstream fails fast. Go duration like `"30s"`; empty/`"0"` disables. |
 | `mode` | enum | `perSession` | `perSession` = one upstream connection per client (full server→client bridging); `shared` = one connection multiplexed across all clients (no server→client bridging). See [Connection modes](#connection-modes). |
-| `idleTimeout` | duration | `0` | Per-upstream lazy mode: backend isn't started at boot but on first request to its route, then torn down after this idle span and revived on the next request. Go duration like `"5m"`; empty/`"0"` keeps it eager. Independent of the process-level `--idle-timeout`. |
+| `idleTimeout` | duration | `0` | Per-upstream lazy mode: backend isn't started at boot but on first request to its route, then torn down after this idle span and revived on the next request. An in-flight call is never torn down under it; a held-open server→client stream doesn't count as activity, so a connected-but-idle client is still reclaimed. Go duration like `"5m"`; empty/`"0"` keeps it eager. Independent of the process-level `--idle-timeout`. |
 
 ## Transparency
 

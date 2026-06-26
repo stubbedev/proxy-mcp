@@ -77,6 +77,37 @@ func TestLazyUpstreamConnectsOnDemandAndTearsDown(t *testing.T) {
 	}
 }
 
+// TestCommitSessionRejectsStaleGeneration covers Edge 2: a per-session dial
+// that completes after a teardown advanced the connection generation must be
+// discarded, never stored against the dead generation where it would strand a
+// dead session for that client.
+func TestCommitSessionRejectsStaleGeneration(t *testing.T) {
+	up := newUpstream("up", &MCPProxyConfigV2{Name: "p", Version: "1.0.0", Type: MCPServerTypeStreamable},
+		streamableCfg("http://127.0.0.1:1"))
+
+	// A dial that began in the current generation commits normally.
+	gen := up.gen.Load()
+	up.commitSession("live", &sessConn{}, gen)
+	up.mu.RLock()
+	_, ok := up.sessions["live"]
+	up.mu.RUnlock()
+	if !ok {
+		t.Fatal("commitSession dropped a connection from the current generation")
+	}
+
+	// teardown advances the generation; a late dial commit must be rejected.
+	up.gen.Add(1)
+	if cs := up.commitSession("stale", &sessConn{}, gen); cs != nil {
+		t.Fatal("commitSession returned a session for a stale generation")
+	}
+	up.mu.RLock()
+	_, ok = up.sessions["stale"]
+	up.mu.RUnlock()
+	if ok {
+		t.Fatal("commitSession stranded a stale-generation connection in the map")
+	}
+}
+
 // TestSessionForReportsUnavailable confirms the nil-session guard: a torn-down /
 // never-connected upstream yields a clean error instead of a nil deref, so one
 // dead backend can't panic a shared proxy process.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -124,7 +125,6 @@ type upstream struct {
 	server      *mcp.Server
 	perSession  bool
 	callTimeout time.Duration
-	baseCtx     context.Context
 
 	// Lazy lifecycle (idleTimeout > 0). The backend is connected on the first
 	// request and torn down after idleTimeout of silence, then re-connected on
@@ -137,7 +137,14 @@ type upstream struct {
 	connected   bool
 	connCancel  context.CancelFunc
 
+	// gen labels the current connection generation. teardown bumps it so a
+	// per-session dial that was in flight when the backend was torn down is
+	// discarded instead of being stored against a dead generation. atomic so
+	// clientFor can snapshot it without ordering against connMu.
+	gen atomic.Uint64
+
 	mu       sync.RWMutex
+	baseCtx  context.Context
 	tmpl     *sessConn
 	sessions map[string]*sessConn
 
@@ -249,6 +256,10 @@ func (u *upstream) teardown() {
 		u.connCancel = nil
 	}
 	u.connected = false
+	// Advance the generation BEFORE close() empties the session map, so any
+	// per-session dial still in flight commits against the old generation and
+	// is rejected instead of stranded in the freshly emptied map.
+	u.gen.Add(1)
 	u.close()
 }
 
@@ -263,12 +274,12 @@ func (u *upstream) isConnected() bool {
 // capabilities on the proxy server. Re-callable (reconnect): Set/Remove make
 // registration idempotent.
 func (u *upstream) connect(ctx context.Context) error {
-	u.baseCtx = ctx
 	sc, err := u.dial(ctx, nil)
 	if err != nil {
 		return err
 	}
 	u.mu.Lock()
+	u.baseCtx = ctx
 	u.tmpl = sc
 	u.mu.Unlock()
 	u.registerCapabilities(ctx)
@@ -366,25 +377,56 @@ func (u *upstream) clientFor(ss *mcp.ServerSession) *mcp.ClientSession {
 	id := ss.ID()
 	u.mu.RLock()
 	sc := u.sessions[id]
+	base := u.baseCtx
 	u.mu.RUnlock()
 	if sc != nil {
 		return sc.cs
 	}
-	sc, err := u.dial(u.baseCtx, ss)
+	// Snapshot the generation we're dialing under. If a teardown bumps it while
+	// we dial, commitSession discards this connection rather than stranding it.
+	gen := u.gen.Load()
+	sc, err := u.dial(base, ss)
 	if err != nil {
 		log.Printf("<%s> per-session connect failed for %s: %v (using template)", u.name, id, err)
 		return u.template()
 	}
+	if cs := u.commitSession(id, sc, gen); cs != nil {
+		return cs
+	}
+	// The backend was torn down while we dialed; fall back to the template
+	// (which is nil after teardown, so sessionFor returns a clean error and the
+	// client retries into a fresh revive).
+	log.Printf("<%s> per-session connect raced teardown for %s; using template", u.name, id)
+	return u.template()
+}
+
+// commitSession stores a freshly dialed per-session connection unless the
+// connection generation advanced while dialing (a teardown raced the dial) or a
+// concurrent dial already won. In both cases the surplus connection is closed
+// and the existing/template path is used instead. Returns the session to use,
+// or nil when the generation is stale.
+func (u *upstream) commitSession(id string, sc *sessConn, gen uint64) *mcp.ClientSession {
 	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.gen.Load() != gen {
+		u.closeConn(sc)
+		return nil
+	}
 	if existing := u.sessions[id]; existing != nil {
-		u.mu.Unlock()
-		_ = sc.cs.Close()
+		u.closeConn(sc)
 		return existing.cs
 	}
 	u.sessions[id] = sc
-	u.mu.Unlock()
 	log.Printf("<%s> opened per-session connection for %s", u.name, id)
 	return sc.cs
+}
+
+// closeConn closes a session connection, tolerating a nil session (a dial that
+// failed before establishing one).
+func (u *upstream) closeConn(sc *sessConn) {
+	if sc != nil && sc.cs != nil {
+		_ = sc.cs.Close()
+	}
 }
 
 // sessionFor resolves the upstream session for a request, returning an error

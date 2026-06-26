@@ -40,6 +40,32 @@ func TestMonitorIdleStaysAliveWhileActive(t *testing.T) {
 	}
 }
 
+// TestMonitorIdleWaitsForInflight covers Edge 1: a request that runs longer
+// than idleTimeout must not have its backend (or the process) torn down under
+// it. While a request/response exchange is in flight the monitor stays its
+// hand, then fires once it drains.
+func TestMonitorIdleWaitsForInflight(t *testing.T) {
+	tr := newActivityTracker()
+	tr.begin() // a request is in flight
+
+	fired := make(chan struct{})
+	tr.monitorIdle(t.Context(), 150*time.Millisecond, func() { close(fired) })
+
+	select {
+	case <-fired:
+		t.Fatal("idle monitor fired while a request was in flight")
+	case <-time.After(600 * time.Millisecond):
+	}
+
+	tr.end() // request done
+
+	select {
+	case <-fired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("idle monitor never fired after the in-flight request drained")
+	}
+}
+
 func TestMonitorIdleDisabled(t *testing.T) {
 	tr := newActivityTracker()
 
