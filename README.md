@@ -9,7 +9,36 @@ It adds a real **readiness gate** on top of the proxy core, closing the
 service) reaches the proxy after the port binds but before upstream routes are
 registered.
 
-## Build
+## Install
+
+### Homebrew (macOS / Linux)
+
+```sh
+brew install stubbedev/proxy-mcp/proxy-mcp
+```
+
+This taps `stubbedev/homebrew-proxy-mcp` and installs the prebuilt binary for
+your platform (Apple Silicon + Intel macOS, arm64 + amd64 Linux). Upgrade with
+`brew upgrade proxy-mcp`. Each release tag bumps the tap automatically.
+
+### Prebuilt binary
+
+Grab a tarball for your OS/arch from the
+[latest release](https://github.com/stubbedev/proxy-mcp/releases/latest)
+(`darwin`/`linux` × `arm64`/`amd64`), verify its `.sha256`, and drop the
+`proxy-mcp` binary on your `PATH`.
+
+### Go
+
+```sh
+go install github.com/stubbedev/proxy-mcp@latest
+```
+
+### Docker / Nix
+
+See [Docker](#docker) and [Nix](#nix) below.
+
+## Build from source
 
 ```sh
 just build          # -> ./bin/proxy-mcp
