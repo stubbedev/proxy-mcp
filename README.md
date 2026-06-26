@@ -21,6 +21,10 @@ This taps `stubbedev/homebrew-proxy-mcp` and installs the prebuilt binary for
 your platform (Apple Silicon + Intel macOS, arm64 + amd64 Linux). Upgrade with
 `brew upgrade proxy-mcp`. Each release tag bumps the tap automatically.
 
+The formula ships a `brew services` definition, so you can run one always-on
+instance shared by every MCP client on the machine — see
+[One shared instance (macOS)](#one-shared-instance-macos).
+
 ### Prebuilt binary
 
 Grab a tarball for your OS/arch from the
@@ -65,6 +69,56 @@ GNU-style flags (each has a `--long` form; most a short alias):
 | `--idle-timeout` | `-i` | `0` | exit after this much idle time with no proxied requests (e.g. `5m`); `0` disables |
 | `--version` | `-v` | | print version and exit |
 | `--help` | `-h` | | print usage and exit |
+
+## One shared instance (macOS)
+
+Run a single always-on proxy that every Claude client on the machine shares —
+one set of upstream backends across all your repos, instead of each client
+spawning its own.
+
+1. **Write a central config** at `$(brew --prefix)/etc/proxy-mcp/config.json`
+   (e.g. `/opt/homebrew/etc/proxy-mcp/config.json`) listing every upstream you
+   want, with `mcpProxy.addr` bound to a loopback port:
+
+   ```json
+   {
+     "mcpProxy": { "addr": "127.0.0.1:9090", "baseURL": "http://127.0.0.1:9090", "type": "streamable-http" },
+     "mcpServers": {
+       "fetch":  { "command": "uvx", "args": ["mcp-server-fetch"] },
+       "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }
+     }
+   }
+   ```
+
+2. **Start the service** (launchd under the hood; `keep_alive` restarts it on
+   crash and relaunches at login):
+
+   ```sh
+   brew services start proxy-mcp
+   ```
+
+3. **Point every client at the per-upstream URLs.** The proxy is not one merged
+   endpoint — each `mcpServers` entry mounts at its own path `/<name>/`. For
+   Claude Code, register them once with `--scope user` so they apply in *every*
+   repo, not per-project:
+
+   ```sh
+   claude mcp add -t http -s user fetch  http://127.0.0.1:9090/fetch/
+   claude mcp add -t http -s user github http://127.0.0.1:9090/github/
+   ```
+
+   Claude Desktop and other clients take the same `http://127.0.0.1:9090/<name>/`
+   URLs over the streamable-HTTP transport.
+
+Leave each upstream's `options.mode` at its `perSession` default so
+server→client requests (`sampling`, `roots`, `elicitation`) bridge cleanly to
+the right client; use `shared` only for a singleton backend (see
+[Connection modes](#connection-modes)). Don't set `--idle-timeout` here —
+idle-shutdown pairs with socket activation (Linux/systemd only); an always-on
+`brew services` instance should just stay up.
+
+Logs land at `$(brew --prefix)/var/log/proxy-mcp.log`. Stop/restart with
+`brew services stop|restart proxy-mcp`.
 
 ## Configuration
 

@@ -223,6 +223,22 @@ jobs:
               bin.install "proxy-mcp"
             end
 
+            service do
+              run [opt_bin/"proxy-mcp", "--config", etc/"proxy-mcp/config.json"]
+              keep_alive true
+              log_path var/"log/proxy-mcp.log"
+              error_log_path var/"log/proxy-mcp.log"
+            end
+
+            def caveats
+              <<~EOS
+                proxy-mcp's service reads a config from:
+                  #{etc}/proxy-mcp/config.json
+                Create it first (see https://github.com/stubbedev/proxy-mcp#configuration), then:
+                  brew services start proxy-mcp
+              EOS
+            end
+
             test do
               assert_match version.to_s, shell_output("#{bin}/proxy-mcp --version")
             end
