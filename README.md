@@ -122,7 +122,7 @@ Logs land at `$(brew --prefix)/var/log/proxy-mcp.log`. Stop/restart with
 
 ## Configuration
 
-See `config.json` for a worked example. Minimal shape:
+Minimal shape:
 
 ```json
 {
@@ -139,12 +139,48 @@ See `config.json` for a worked example. Minimal shape:
 }
 ```
 
-Each `mcpServers` entry is either stdio (`command` + `args` + `env`) or
-HTTP (`url` + `headers`, optionally `transportType: "streamable-http"`).
-Per-server `options` cover `authTokens`, `logEnabled`, `panicIfInvalid`,
-`disabled`, a `toolFilter` (`allow`/`block` list), and `callTimeout` (a Go
-duration like `"30s"` bounding each forwarded request — tool call, prompt get,
-resource read, completion — so a hung upstream fails fast; empty/`"0"` disables).
+`config.example.json` is an exhaustive worked example exercising every field
+below across stdio, SSE, and streamable-HTTP upstreams.
+
+### `mcpProxy` — the proxy's own listener
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `addr` | string | Listen address, e.g. `":9090"` or `"127.0.0.1:9090"`. Ignored under socket activation. |
+| `baseURL` | string | Public base URL. Its path becomes the mount prefix; each upstream serves at `<baseURL path>/<name>/`. |
+| `name` | string | Server name advertised to clients. |
+| `version` | string | Server version advertised to clients. |
+| `type` | enum | Downstream transport the proxy exposes: `streamable-http` (default) or `sse`. |
+| `options` | object | Defaults inherited by every upstream that doesn't set its own — only `authTokens`, `logEnabled`, `panicIfInvalid` are inherited. |
+
+### `mcpServers.<name>` — one entry per upstream
+
+`<name>` is the route segment (`/<name>/`). Each entry is **stdio** (set
+`command`) or **HTTP** (set `url`); `transportType` is optional and inferred.
+
+| Field | Applies to | Type | Meaning |
+| --- | --- | --- | --- |
+| `transportType` | both | enum | `stdio`, `sse`, or `streamable-http`. Optional — inferred from `command` vs `url` (HTTP defaults to `sse` unless set to `streamable-http`). |
+| `command` | stdio | string | Executable to spawn. |
+| `args` | stdio | string[] | Arguments. |
+| `env` | stdio | object | Extra environment on top of the proxy's own. |
+| `url` | HTTP | string | Upstream endpoint. |
+| `headers` | HTTP | object | Static headers added to every upstream request (on top of forwarded caller headers). |
+| `timeout` | HTTP | duration-ns | Parsed but **currently inert** — no per-request HTTP timeout is applied. Use `options.callTimeout`. |
+| `options` | both | object | Per-upstream options, below. |
+
+### `options` (proxy-level defaults or per-upstream)
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `authTokens` | string[] | — | Bearer tokens required on the upstream's `/<name>/` route. Any one matches; empty = no auth. Per-upstream value overrides the inherited proxy default. |
+| `logEnabled` | bool | `false` | Log requests on this route. Inherited from proxy if unset. |
+| `panicIfInvalid` | bool | `false` | Fail the whole proxy if this upstream can't connect (instead of serving degraded). Inherited from proxy if unset. |
+| `disabled` | bool | `false` | Skip this upstream entirely — no route registered. |
+| `toolFilter` | object | — | `{ "mode": "allow" \| "block", "list": [...] }`. `allow` exposes only listed tools; `block` hides them. |
+| `callTimeout` | duration | `0` | Bounds each forwarded request (tool call, prompt get, resource read, completion) so a hung upstream fails fast. Go duration like `"30s"`; empty/`"0"` disables. |
+| `mode` | enum | `perSession` | `perSession` = one upstream connection per client (full server→client bridging); `shared` = one connection multiplexed across all clients (no server→client bridging). See [Connection modes](#connection-modes). |
+| `idleTimeout` | duration | `0` | Per-upstream lazy mode: backend isn't started at boot but on first request to its route, then torn down after this idle span and revived on the next request. Go duration like `"5m"`; empty/`"0"` keeps it eager. Independent of the process-level `--idle-timeout`. |
 
 ## Transparency
 

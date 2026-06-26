@@ -1,0 +1,59 @@
+{
+  "mcpProxy": {
+    "baseURL": "http://127.0.0.1:9090",
+    "addr": "127.0.0.1:9090",
+    "name": "proxy-mcp",
+    "version": "1.0.0",
+    "type": "streamable-http",
+    "options": {
+      "panicIfInvalid": false,
+      "logEnabled": true,
+      "authTokens": ["default-bearer-token"]
+    }
+  },
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": { "HTTP_PROXY": "$HTTP_PROXY" },
+      "options": {
+        "logEnabled": true,
+        "callTimeout": "30s",
+        "idleTimeout": "5m",
+        "toolFilter": { "mode": "allow", "list": ["fetch"] }
+      }
+    },
+    "github": {
+      "transportType": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_TOKEN" },
+      "options": {
+        "panicIfInvalid": true,
+        "toolFilter": { "mode": "block", "list": ["create_or_update_file"] }
+      }
+    },
+    "browser": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp"],
+      "options": {
+        "mode": "shared"
+      }
+    },
+    "remote-sse": {
+      "transportType": "sse",
+      "url": "https://mcp.example.com/sse?key=$AMAP_KEY",
+      "headers": { "X-Api-Key": "$AMAP_KEY" }
+    },
+    "remote-http": {
+      "transportType": "streamable-http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer $UPSTREAM_TOKEN" },
+      "options": {
+        "disabled": false,
+        "authTokens": ["per-upstream-bearer-token"],
+        "callTimeout": "1m"
+      }
+    }
+  }
+}
