@@ -127,6 +127,9 @@ func (u *upstream) close() {
 	defer u.mu.Unlock()
 	if u.tmpl != nil {
 		_ = u.tmpl.cs.Close()
+		// Drop the reference so template() reports nil after teardown; a stale
+		// closed session would slip past the sessionFor nil-guard.
+		u.tmpl = nil
 	}
 	for id, sc := range u.sessions {
 		_ = sc.cs.Close()

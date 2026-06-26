@@ -83,6 +83,15 @@ type OptionsV2 struct {
 	// Use "shared" for a singleton backend you want exactly one of (e.g. a
 	// browser); use the default for everything else.
 	Mode string `json:"mode,omitempty"`
+	// IdleTimeout, when set (a Go duration like "5m"), makes this upstream
+	// lazy: its backend process is NOT started at boot but on the first request
+	// to its route, and is torn down again after this much idle time, then
+	// re-started lazily on the next request. Empty/"0" keeps the upstream eager
+	// (connected at boot, never torn down). This is per-upstream and
+	// independent of the process-level --idle-timeout, which exits the whole
+	// proxy: several lazy upstreams can share one process, each retiring its own
+	// backend on its own clock.
+	IdleTimeout string `json:"idleTimeout,omitempty"`
 }
 
 // perSession reports whether this upstream uses a dedicated connection per
@@ -100,6 +109,20 @@ func (o *OptionsV2) callTimeout() time.Duration {
 	d, err := time.ParseDuration(o.CallTimeout)
 	if err != nil || d < 0 {
 		log.Printf("ignoring invalid callTimeout %q: %v", o.CallTimeout, err)
+		return 0
+	}
+	return d
+}
+
+// idleTimeout parses IdleTimeout into a duration. Returns 0 (eager, no
+// teardown) when empty, zero, or malformed.
+func (o *OptionsV2) idleTimeout() time.Duration {
+	if o == nil || o.IdleTimeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(o.IdleTimeout)
+	if err != nil || d < 0 {
+		log.Printf("ignoring invalid idleTimeout %q: %v", o.IdleTimeout, err)
 		return 0
 	}
 	return d

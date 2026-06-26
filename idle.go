@@ -58,6 +58,13 @@ func (t *activityTracker) monitorIdle(ctx context.Context, idleTimeout time.Dura
 	t.touch()
 	interval := max(idleTimeout/4, 100*time.Millisecond)
 	go func() {
+		// onIdle teardown runs SDK/upstream close paths; recover so a panic in
+		// one upstream's teardown can't kill the process and its siblings.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("idle monitor recovered from panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -156,8 +157,10 @@ func mcpHandler(serverType MCPServerType, srv *mcp.Server) http.Handler {
 }
 
 // middlewares builds the per-route chain: recovery always, then optional
-// request logging, auth, and (when idle-exit is on) activity tracking.
-func (r *routeRegistrar) middlewares(name string, clientConfig *MCPClientConfigV2) []MiddlewareFunc {
+// request logging, auth, process-level activity tracking (drives --idle-timeout
+// process exit) and, for a lazy upstream, its own activity tracking (drives
+// per-backend idle teardown).
+func (r *routeRegistrar) middlewares(name string, clientConfig *MCPClientConfigV2, up *upstream) []MiddlewareFunc {
 	mws := []MiddlewareFunc{recoverMiddleware(name)}
 	if clientConfig.Options.LogEnabled.OrElse(false) {
 		mws = append(mws, loggerMiddleware(name))
@@ -168,34 +171,61 @@ func (r *routeRegistrar) middlewares(name string, clientConfig *MCPClientConfigV
 	if r.idleTimeout > 0 {
 		mws = append(mws, r.activity.middleware())
 	}
+	if up.activity != nil {
+		mws = append(mws, up.activity.middleware())
+	}
 	return mws
 }
 
-// connect dials the upstream and, on success, mounts its route and records it
-// ready. It returns an error only when the upstream sets PanicIfInvalid; a
-// plain connect failure is logged, marked failed, and tolerated (degraded).
-// After a successful first connect the upstream auto-reconnects on later drops.
-func (r *routeRegistrar) connect(
+// lazyConnectHandler defers the upstream connection until the first request
+// reaches its route, then serves it. It runs innermost (after auth) so an
+// unauthorized request never starts a backend, and ensureConnected re-connects
+// transparently after an idle teardown. A connect failure answers 503 for this
+// route only — siblings are untouched.
+func lazyConnectHandler(ctx context.Context, up *upstream, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if err := up.ensureConnected(ctx); err != nil {
+			log.Printf("<%s> on-demand connect failed: %v", up.name, err)
+			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
+// register mounts an upstream's route. A lazy upstream (idleTimeout set) is
+// mounted behind lazyConnectHandler and connects on first request; an eager
+// upstream is dialed now and mounted only on success. It returns an error only
+// when an eager upstream sets PanicIfInvalid; a plain connect failure is
+// logged, marked failed, and tolerated (degraded) so one bad backend never
+// stops the others from serving. After a successful connect the upstream
+// auto-reconnects on later drops.
+func (r *routeRegistrar) register(
 	ctx context.Context,
 	name string,
 	up *upstream,
 	clientConfig *MCPClientConfigV2,
 ) error {
-	log.Printf("<%s> Connecting", name)
-	if cErr := up.connect(ctx); cErr != nil {
-		log.Printf("<%s> Failed to connect upstream: %v", name, cErr)
-		r.tracker.setFailed(name, cErr)
-		if clientConfig.Options.PanicIfInvalid.OrElse(false) {
-			return cErr
-		}
-		return nil
-	}
-	log.Printf("<%s> Connected", name)
-
 	mcpRoute := routeForServer(r.basePath, name, r.serverType)
+	core := mcpHandler(r.serverType, up.server)
+	if up.lazy {
+		core = lazyConnectHandler(ctx, up, core)
+		log.Printf("<%s> lazy; will connect on first request", name)
+	} else {
+		log.Printf("<%s> Connecting", name)
+		if cErr := up.connect(ctx); cErr != nil {
+			log.Printf("<%s> Failed to connect upstream: %v", name, cErr)
+			r.tracker.setFailed(name, cErr)
+			if clientConfig.Options.PanicIfInvalid.OrElse(false) {
+				return cErr
+			}
+			return nil
+		}
+		log.Printf("<%s> Connected", name)
+	}
+
 	log.Printf("<%s> Handling requests at %s", name, mcpRoute)
-	handler := mcpHandler(r.serverType, up.server)
-	r.mux.Handle(mcpRoute, chainMiddleware(handler, r.middlewares(name, clientConfig)...))
+	r.mux.Handle(mcpRoute, chainMiddleware(core, r.middlewares(name, clientConfig, up)...))
 	r.tracker.setConnected(name)
 	r.httpServer.RegisterOnShutdown(func() {
 		log.Printf("<%s> Shutting down", name)
@@ -292,8 +322,16 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 			continue
 		}
 		up := newUpstream(name, config.McpProxy, clientConfig)
-		errorGroup.Go(func() error {
-			return registrar.connect(ctx, name, up, clientConfig)
+		errorGroup.Go(func() (err error) {
+			// A panic during one upstream's registration is contained and marked
+			// failed, never propagated to crash the whole proxy.
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("<%s> recovered from panic during registration: %v", name, rec)
+					tracker.setFailed(name, fmt.Errorf("panic: %v", rec))
+				}
+			}()
+			return registrar.register(ctx, name, up, clientConfig)
 		})
 	}
 

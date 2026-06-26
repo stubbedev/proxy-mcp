@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -125,6 +126,17 @@ type upstream struct {
 	callTimeout time.Duration
 	baseCtx     context.Context
 
+	// Lazy lifecycle (idleTimeout > 0). The backend is connected on the first
+	// request and torn down after idleTimeout of silence, then re-connected on
+	// demand. connMu guards the connected/connCancel transition so concurrent
+	// first requests serialize and exactly one connect/teardown wins.
+	lazy        bool
+	idleTimeout time.Duration
+	activity    *activityTracker
+	connMu      sync.Mutex
+	connected   bool
+	connCancel  context.CancelFunc
+
 	mu       sync.RWMutex
 	tmpl     *sessConn
 	sessions map[string]*sessConn
@@ -152,7 +164,12 @@ func newUpstream(name string, proxyCfg *MCPProxyConfigV2, clientCfg *MCPClientCo
 		info:        &mcp.Implementation{Name: proxyCfg.Name, Version: proxyCfg.Version},
 		perSession:  clientCfg.Options.perSession(),
 		callTimeout: clientCfg.Options.callTimeout(),
+		idleTimeout: clientCfg.Options.idleTimeout(),
 		sessions:    make(map[string]*sessConn),
+	}
+	if u.idleTimeout > 0 {
+		u.lazy = true
+		u.activity = newActivityTracker()
 	}
 	u.server = mcp.NewServer(u.info, &mcp.ServerOptions{
 		HasTools:                true,
@@ -164,6 +181,82 @@ func newUpstream(name string, proxyCfg *MCPProxyConfigV2, clientCfg *MCPClientCo
 	// Forward logging/setLevel to the caller's upstream connection.
 	u.server.AddReceivingMiddleware(u.serverMiddleware)
 	return u
+}
+
+// connectTimeout bounds the upstream MCP handshake (initialize + capability
+// enumeration), so one backend that hangs on startup can never block readiness
+// or wedge a request forever — it fails its own route and leaves siblings
+// untouched. It bounds only the handshake, not the backend process lifetime.
+const connectTimeout = 30 * time.Second
+
+// safeGo runs fn in a goroutine that recovers from panics. Every background
+// task a backend can drive (template watch, capability re-registration, session
+// sweep, idle teardown) goes through here, so a misbehaving upstream that
+// panics in one of them is logged and contained instead of crashing the whole
+// proxy and taking its siblings down.
+func safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("<%s> recovered from panic in background task: %v", name, r)
+			}
+		}()
+		fn()
+	}()
+}
+
+// ensureConnected lazily establishes the upstream on first use and (re)arms its
+// idle teardown timer. Cheap and idempotent once connected (just records
+// activity). Serialized by connMu so concurrent first requests start exactly
+// one backend. On connect failure it returns the error (the route answers 503)
+// without affecting any other upstream.
+func (u *upstream) ensureConnected(ctx context.Context) error {
+	u.connMu.Lock()
+	defer u.connMu.Unlock()
+	if u.connected {
+		u.activity.touch()
+		return nil
+	}
+	// connCtx scopes this connection generation: teardown cancels it to stop the
+	// backend process, the template watcher, and the idle monitor together,
+	// while leaving ctx (the server lifetime) intact for the next reconnect.
+	connCtx, cancel := context.WithCancel(ctx)
+	if err := u.connect(connCtx); err != nil {
+		cancel()
+		return err
+	}
+	u.connCancel = cancel
+	u.connected = true
+	u.activity.touch()
+	u.activity.monitorIdle(connCtx, u.idleTimeout, u.teardown)
+	log.Printf("<%s> connected on demand", u.name)
+	return nil
+}
+
+// teardown stops the lazy upstream's backend process and connections after it
+// has gone idle, and re-arms lazy connect for the next request. Idempotent.
+// Cancelling connCtx first makes the template watcher treat the close as
+// intentional (it sees ctx.Err() and does not reconnect).
+func (u *upstream) teardown() {
+	u.connMu.Lock()
+	defer u.connMu.Unlock()
+	if !u.connected {
+		return
+	}
+	log.Printf("<%s> idle %s, stopping backend", u.name, u.idleTimeout)
+	if u.connCancel != nil {
+		u.connCancel()
+		u.connCancel = nil
+	}
+	u.connected = false
+	u.close()
+}
+
+// isConnected reports whether a lazy upstream currently has a live backend.
+func (u *upstream) isConnected() bool {
+	u.connMu.Lock()
+	defer u.connMu.Unlock()
+	return u.connected
 }
 
 // connect establishes the template session and registers the upstream's
@@ -179,9 +272,9 @@ func (u *upstream) connect(ctx context.Context) error {
 	u.tmpl = sc
 	u.mu.Unlock()
 	u.registerCapabilities(ctx)
-	go u.watchTemplate(ctx, sc.cs)
+	safeGo(u.name, func() { u.watchTemplate(ctx, sc.cs) })
 	if u.perSession {
-		go u.sweepSessions(ctx)
+		safeGo(u.name, func() { u.sweepSessions(ctx) })
 	}
 	return nil
 }
@@ -237,11 +330,16 @@ func (u *upstream) dial(ctx context.Context, downstream *mcp.ServerSession) (*se
 	if downstream != nil {
 		u.syncRoots(ctx, downstream, sc)
 	}
+	// buildTransport gets the long-lived ctx (a stdio child's lifetime is tied
+	// to it); only the handshake below is bounded by connectTimeout, so a hung
+	// backend fails its own connect instead of blocking forever.
 	tr, err := buildTransport(ctx, u.clientCfg)
 	if err != nil {
 		return nil, err
 	}
-	cs, err := cl.Connect(ctx, tr, nil)
+	dialCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	cs, err := cl.Connect(dialCtx, tr, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +385,17 @@ func (u *upstream) clientFor(ss *mcp.ServerSession) *mcp.ClientSession {
 	u.mu.Unlock()
 	log.Printf("<%s> opened per-session connection for %s", u.name, id)
 	return sc.cs
+}
+
+// sessionFor resolves the upstream session for a request, returning an error
+// instead of a nil session when the upstream has no live connection (e.g. a
+// crashed backend mid-reconnect). Callers forward the error to the downstream
+// client as a clean failure rather than dereferencing nil and panicking.
+func (u *upstream) sessionFor(ss *mcp.ServerSession) (*mcp.ClientSession, error) {
+	if cs := u.clientFor(ss); cs != nil {
+		return cs, nil
+	}
+	return nil, fmt.Errorf("upstream %q is not connected", u.name)
 }
 
 // syncRoots mirrors the downstream client's workspace roots onto sc's upstream
@@ -383,7 +492,11 @@ func (u *upstream) opCtx(ctx context.Context, extra *mcp.RequestExtra) (context.
 func (u *upstream) toolHandler(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ctx, cancel := u.opCtx(ctx, req.Extra)
 	defer cancel()
-	return u.clientFor(req.Session).CallTool(ctx, &mcp.CallToolParams{
+	cs, err := u.sessionFor(req.Session)
+	if err != nil {
+		return nil, err
+	}
+	return cs.CallTool(ctx, &mcp.CallToolParams{
 		Name:      req.Params.Name,
 		Arguments: req.Params.Arguments,
 		Meta:      req.Params.Meta,
@@ -393,27 +506,47 @@ func (u *upstream) toolHandler(ctx context.Context, req *mcp.CallToolRequest) (*
 func (u *upstream) promptHandler(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	ctx, cancel := u.opCtx(ctx, req.Extra)
 	defer cancel()
-	return u.clientFor(req.Session).GetPrompt(ctx, req.Params)
+	cs, err := u.sessionFor(req.Session)
+	if err != nil {
+		return nil, err
+	}
+	return cs.GetPrompt(ctx, req.Params)
 }
 
 func (u *upstream) resourceHandler(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	ctx, cancel := u.opCtx(ctx, req.Extra)
 	defer cancel()
-	return u.clientFor(req.Session).ReadResource(ctx, req.Params)
+	cs, err := u.sessionFor(req.Session)
+	if err != nil {
+		return nil, err
+	}
+	return cs.ReadResource(ctx, req.Params)
 }
 
 func (u *upstream) handleComplete(ctx context.Context, req *mcp.CompleteRequest) (*mcp.CompleteResult, error) {
 	ctx, cancel := u.opCtx(ctx, req.Extra)
 	defer cancel()
-	return u.clientFor(req.Session).Complete(ctx, req.Params)
+	cs, err := u.sessionFor(req.Session)
+	if err != nil {
+		return nil, err
+	}
+	return cs.Complete(ctx, req.Params)
 }
 
 func (u *upstream) handleSubscribe(ctx context.Context, req *mcp.SubscribeRequest) error {
-	return u.clientFor(req.Session).Subscribe(ctx, req.Params)
+	cs, err := u.sessionFor(req.Session)
+	if err != nil {
+		return err
+	}
+	return cs.Subscribe(ctx, req.Params)
 }
 
 func (u *upstream) handleUnsubscribe(ctx context.Context, req *mcp.UnsubscribeRequest) error {
-	return u.clientFor(req.Session).Unsubscribe(ctx, req.Params)
+	cs, err := u.sessionFor(req.Session)
+	if err != nil {
+		return err
+	}
+	return cs.Unsubscribe(ctx, req.Params)
 }
 
 // serverMiddleware forwards logging/setLevel to the caller's upstream session,
@@ -423,7 +556,9 @@ func (u *upstream) serverMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		if method == "logging/setLevel" {
 			if p, ok := req.GetParams().(*mcp.SetLoggingLevelParams); ok {
 				if ss, ok := sessionOf(req); ok {
-					if err := u.clientFor(ss).SetLoggingLevel(ctx, p); err != nil {
+					if cs, err := u.sessionFor(ss); err != nil {
+						log.Printf("<%s> forward setLevel skipped: %v", u.name, err)
+					} else if err := cs.SetLoggingLevel(ctx, p); err != nil {
 						log.Printf("<%s> forward setLevel failed: %v", u.name, err)
 					}
 				}
@@ -454,7 +589,7 @@ func (u *upstream) clientMiddleware(downstream *mcp.ServerSession) mcp.Middlewar
 			case "notifications/tools/list_changed",
 				"notifications/prompts/list_changed",
 				"notifications/resources/list_changed":
-				go u.registerCapabilities(u.baseCtx)
+				safeGo(u.name, func() { u.registerCapabilities(u.baseCtx) })
 				return nil, nil
 			case "notifications/message":
 				u.relayLog(ctx, downstream, req)
