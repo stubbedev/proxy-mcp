@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -18,7 +17,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"golang.org/x/sync/errgroup"
 )
 
 type MiddlewareFunc func(http.Handler) http.Handler
@@ -93,13 +91,17 @@ func routeForServer(basePath, name string, serverType MCPServerType) string {
 	return route + "/"
 }
 
-// buildListener returns the proxy's listener. Under systemd socket activation
-// it adopts the passed-in socket (LISTEN_FDS) and reports activated=true;
-// otherwise it binds addr itself. Adopting the socket lets a `.socket` unit own
-// the port and start the proxy on demand, exiting (see --idle-timeout) when
-// quiet without dropping the port.
+// buildListener returns the proxy's listener. Under socket activation it adopts
+// the passed-in socket — systemd's LISTEN_FDS on Linux or launchd's
+// launch_activate_socket on macOS — and reports activated=true; otherwise it
+// binds addr itself. Adopting the socket lets the init system own the port and
+// start the proxy on demand, exiting (see --idle-timeout) when quiet without
+// dropping the port.
 func buildListener(ctx context.Context, addr string) (net.Listener, bool, error) {
 	if ln := systemdListener(); ln != nil {
+		return ln, true, nil
+	}
+	if ln := launchdListener(); ln != nil {
 		return ln, true, nil
 	}
 	var lc net.ListenConfig
@@ -135,18 +137,6 @@ func systemdListener() net.Listener {
 	return ln
 }
 
-// routeRegistrar bundles the shared state needed to connect an upstream and
-// mount its route, keeping startHTTPServer's per-upstream goroutine small.
-type routeRegistrar struct {
-	tracker     *readinessTracker
-	mux         *http.ServeMux
-	httpServer  *http.Server
-	basePath    string
-	serverType  MCPServerType
-	activity    *activityTracker
-	idleTimeout time.Duration
-}
-
 // mcpHandler builds the SDK HTTP handler that serves a proxy server.
 func mcpHandler(serverType MCPServerType, srv *mcp.Server) http.Handler {
 	get := func(*http.Request) *mcp.Server { return srv }
@@ -154,84 +144,6 @@ func mcpHandler(serverType MCPServerType, srv *mcp.Server) http.Handler {
 		return mcp.NewSSEHandler(get, nil)
 	}
 	return mcp.NewStreamableHTTPHandler(get, nil)
-}
-
-// middlewares builds the per-route chain: recovery always, then optional
-// request logging, auth, process-level activity tracking (drives --idle-timeout
-// process exit) and, for a lazy upstream, its own activity tracking (drives
-// per-backend idle teardown).
-func (r *routeRegistrar) middlewares(name string, clientConfig *MCPClientConfigV2, up *upstream) []MiddlewareFunc {
-	mws := []MiddlewareFunc{recoverMiddleware(name)}
-	if clientConfig.Options.LogEnabled.OrElse(false) {
-		mws = append(mws, loggerMiddleware(name))
-	}
-	if len(clientConfig.Options.AuthTokens) > 0 {
-		mws = append(mws, newAuthMiddleware(clientConfig.Options.AuthTokens))
-	}
-	if r.idleTimeout > 0 {
-		mws = append(mws, r.activity.middleware())
-	}
-	if up.activity != nil {
-		mws = append(mws, up.activity.middleware())
-	}
-	return mws
-}
-
-// lazyConnectHandler defers the upstream connection until the first request
-// reaches its route, then serves it. It runs innermost (after auth) so an
-// unauthorized request never starts a backend, and ensureConnected re-connects
-// transparently after an idle teardown. A connect failure answers 503 for this
-// route only — siblings are untouched.
-func lazyConnectHandler(ctx context.Context, up *upstream, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if err := up.ensureConnected(ctx); err != nil {
-			log.Printf("<%s> on-demand connect failed: %v", up.name, err)
-			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		next.ServeHTTP(w, req)
-	})
-}
-
-// register mounts an upstream's route. A lazy upstream (idleTimeout set) is
-// mounted behind lazyConnectHandler and connects on first request; an eager
-// upstream is dialed now and mounted only on success. It returns an error only
-// when an eager upstream sets PanicIfInvalid; a plain connect failure is
-// logged, marked failed, and tolerated (degraded) so one bad backend never
-// stops the others from serving. After a successful connect the upstream
-// auto-reconnects on later drops.
-func (r *routeRegistrar) register(
-	ctx context.Context,
-	name string,
-	up *upstream,
-	clientConfig *MCPClientConfigV2,
-) error {
-	mcpRoute := routeForServer(r.basePath, name, r.serverType)
-	core := mcpHandler(r.serverType, up.server)
-	if up.lazy {
-		core = lazyConnectHandler(ctx, up, core)
-		log.Printf("<%s> lazy; will connect on first request", name)
-	} else {
-		log.Printf("<%s> Connecting", name)
-		if cErr := up.connect(ctx); cErr != nil {
-			log.Printf("<%s> Failed to connect upstream: %v", name, cErr)
-			r.tracker.setFailed(name, cErr)
-			if clientConfig.Options.PanicIfInvalid.OrElse(false) {
-				return cErr
-			}
-			return nil
-		}
-		log.Printf("<%s> Connected", name)
-	}
-
-	log.Printf("<%s> Handling requests at %s", name, mcpRoute)
-	r.mux.Handle(mcpRoute, chainMiddleware(core, r.middlewares(name, clientConfig, up)...))
-	r.tracker.setConnected(name)
-	r.httpServer.RegisterOnShutdown(func() {
-		log.Printf("<%s> Shutting down", name)
-		up.close()
-	})
-	return nil
 }
 
 // serveHTTP runs the HTTP server on listener. When socket-activated it waits
@@ -260,7 +172,7 @@ func serveHTTP(
 	}
 }
 
-func startHTTPServer(config *Config, idleTimeout time.Duration) error {
+func startHTTPServer(config *Config, idleTimeout time.Duration, loadConfig func() (*Config, error), configPath string) error {
 	baseURL, uErr := url.Parse(config.McpProxy.BaseURL)
 	if uErr != nil {
 		return uErr
@@ -287,65 +199,48 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 		return lErr
 	}
 
-	var errorGroup errgroup.Group
-	httpMux := http.NewServeMux()
+	// A mutable router (not http.ServeMux) so upstream routes can be unmounted on
+	// a config reload — ServeMux can only ever add patterns.
+	rt := newRouter()
 	httpServer := &http.Server{
 		Addr:              config.McpProxy.Addr,
-		Handler:           httpMux,
+		Handler:           rt,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	// Liveness/readiness probes. Registered on the mux BEFORE the listener
-	// starts so they serve from the first accepted connection. /healthz is
-	// liveness (always 200 once listening); /readyz is readiness — it returns
-	// 503 until every upstream is resolved and its /<name>/ route is
-	// registered, then 200, with per-upstream state in the JSON body. Upstream
-	// mcp-proxy binds the port and registers routes asynchronously, so without
-	// this gate a client's first request can race ahead of route registration
-	// and hit a 404. See readinessTracker.
+	// Liveness/readiness probes. Registered BEFORE the listener starts so they
+	// serve from the first accepted connection. /healthz is liveness (always 200
+	// once listening); /readyz is readiness — 503 until every upstream is
+	// resolved and its /<name>/ route is registered, then 200, with per-upstream
+	// state in the JSON body. Routes register asynchronously, so without this
+	// gate a client's first request can race ahead and hit a 404. See
+	// readinessTracker.
 	tracker := newReadinessTracker()
-	tracker.registerProbes(httpMux)
+	tracker.registerProbes(rt)
 
-	registrar := &routeRegistrar{
+	mgr := &proxyManager{
+		ctx:         ctx,
+		router:      rt,
 		tracker:     tracker,
-		mux:         httpMux,
-		httpServer:  httpServer,
 		basePath:    baseURL.Path,
 		serverType:  config.McpProxy.Type,
 		activity:    activity,
 		idleTimeout: idleTimeout,
-	}
-
-	for name, clientConfig := range config.McpServers {
-		if clientConfig.Options.Disabled {
-			log.Printf("<%s> Disabled", name)
-			tracker.setDisabled(name)
-			continue
-		}
-		up := newUpstream(name, config.McpProxy, clientConfig)
-		errorGroup.Go(func() (err error) {
-			// A panic during one upstream's registration is contained and marked
-			// failed, never propagated to crash the whole proxy.
-			defer func() {
-				if rec := recover(); rec != nil {
-					log.Printf("<%s> recovered from panic during registration: %v", name, rec)
-					tracker.setFailed(name, fmt.Errorf("panic: %v", rec))
-				}
-			}()
-			return registrar.register(ctx, name, up, clientConfig)
-		})
+		loadConfig:  loadConfig,
+		configPath:  configPath,
+		proxyCfg:    config.McpProxy,
+		servers:     make(map[string]*managed),
 	}
 
 	go func() {
-		err := errorGroup.Wait()
-		if err != nil {
+		if err := mgr.boot(config); err != nil {
 			log.Fatalf("Failed to add clients: %v", err)
 		}
 		log.Printf("All clients initialized")
 		// Every upstream is resolved and every successful /<name>/ route is now
-		// registered on the mux. Flip the readiness gate, log the stable
-		// "proxy ready" line, fire systemd sd_notify(READY=1) so a Type=notify
-		// unit only reaches `active` now (never mid-startup), and start the
-		// watchdog keepalive if the unit set WatchdogSec.
+		// registered. Flip the readiness gate, log the stable "proxy ready" line,
+		// fire systemd sd_notify(READY=1) so a Type=notify unit only reaches
+		// `active` now (never mid-startup), and start the watchdog keepalive if
+		// the unit set WatchdogSec.
 		tracker.signalReady(ctx)
 		close(readyCh)
 		// Seed the idle clock at readiness (not boot) so a slow upstream
@@ -353,6 +248,8 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 		activity.monitorIdle(ctx, idleTimeout, func() {
 			idleOnce.Do(func() { close(idleShutdown) })
 		})
+		// Watch the config for live add/remove only after the initial set is up.
+		mgr.watchConfig()
 	}()
 
 	go serveHTTP(ctx, httpServer, listener, activated, readyCh, config.McpProxy.Type)
@@ -371,6 +268,7 @@ func startHTTPServer(config *Config, idleTimeout time.Duration) error {
 	defer shutdownCancel()
 
 	err := httpServer.Shutdown(shutdownCtx)
+	mgr.closeAll()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

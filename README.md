@@ -113,9 +113,11 @@ spawning its own.
 Leave each upstream's `options.mode` at its `perSession` default so
 server→client requests (`sampling`, `roots`, `elicitation`) bridge cleanly to
 the right client; use `shared` only for a singleton backend (see
-[Connection modes](#connection-modes)). Don't set `--idle-timeout` here —
-idle-shutdown pairs with socket activation (Linux/systemd only); an always-on
-`brew services` instance should just stay up.
+[Connection modes](#connection-modes)). Don't set `--idle-timeout` on an
+always-on `brew services` instance — it should just stay up. To instead have the
+proxy idle out and relaunch on demand (zero footprint while unused), run it
+under launchd socket activation rather than `brew services` — see
+[Socket activation › macOS](#macos-launchd).
 
 Logs land at `$(brew --prefix)/var/log/proxy-mcp.log`. Stop/restart with
 `brew services stop|restart proxy-mcp`.
@@ -260,6 +262,31 @@ Under systemd, run it as a `Type=notify` unit — the unit reaches
 never races a not-yet-registered route. For orchestrators without systemd,
 gate on `GET /readyz`.
 
+## Live config reload
+
+Adding or removing an `mcpServers` entry takes effect **without a restart**. The
+proxy watches the config and reconciles the running upstreams against it:
+
+- a new entry is connected and its route mounted;
+- a removed entry is unmounted and its backend torn down;
+- a changed entry is re-registered (remove + add). Changes to shared
+  `mcpProxy.options` (e.g. `authTokens`) propagate to every upstream that
+  inherits them.
+
+Listener-level `mcpProxy` fields (`addr`, `type`, `baseURL`) can't change at
+runtime; those still need a restart and are ignored on reload with a warning.
+
+A **local-file** config is reloaded automatically when it changes on disk
+(mtime poll). For an `http(s)` config — or to force a reload — send `SIGHUP`:
+
+```sh
+systemctl reload proxy-mcp          # systemd (or: systemctl --user reload …)
+kill -HUP "$(pgrep -f proxy-mcp)"   # anywhere else
+```
+
+A reload that fails to load (bad JSON, missing `mcpProxy`) is logged and the
+running config is kept untouched.
+
 ## Idle auto-shutdown
 
 With `--idle-timeout` set, the proxy exits cleanly once it has gone that long
@@ -275,17 +302,21 @@ and a `StopWhenUnneeded`/`Restart=` service.
 
 ## Socket activation
 
-When started with systemd socket activation (`$LISTEN_FDS`/`$LISTEN_PID` set,
-the conventional first fd at 3), the proxy adopts the passed listening socket
-instead of binding `mcpProxy.addr` itself — so the `.socket` unit owns the port
-and survives across proxy restarts. Crucially, an activated proxy holds off
-`Accept` until readiness: the connection that triggered activation waits in the
-socket backlog through the upstream cold-start, then is served once routes are
-registered, so it never races registration and 404s. Without activation the
-proxy binds `addr` and serves immediately (external callers still gate on
-`/readyz`).
+Under socket activation the proxy adopts a listening socket the init system
+already opened instead of binding `mcpProxy.addr` itself — so the init system
+owns the port and survives across proxy restarts. Crucially, an activated proxy
+holds off `Accept` until readiness: the connection that triggered activation
+waits in the socket backlog through the upstream cold-start, then is served once
+routes are registered, so it never races registration and 404s. Without
+activation the proxy binds `addr` and serves immediately (external callers still
+gate on `/readyz`). Both activators are detected automatically — systemd on
+Linux, launchd on macOS — so the same binary gives zero-idle on-demand start on
+both platforms.
 
-Minimal pair (user units):
+### Linux (systemd)
+
+Detected via `$LISTEN_FDS`/`$LISTEN_PID` (conventional first fd at 3). Minimal
+pair (user units):
 
 ```ini
 # proxy-mcp.socket
@@ -300,7 +331,51 @@ WantedBy=sockets.target
 # proxy-mcp.service  (no [Install]; started by the socket)
 [Service]
 ExecStart=/path/to/proxy-mcp --config %h/.config/proxy-mcp/config.json --idle-timeout=5m
+ExecReload=/bin/kill -HUP $MAINPID
 ```
+
+`ExecReload` lets `systemctl reload proxy-mcp` (or `--user`) trigger a live
+config reload; the Nix module wires this automatically.
+
+### macOS (launchd)
+
+The macOS binary is built with cgo so it can adopt a launchd socket via
+`launch_activate_socket`. Give the agent a `Sockets` entry named `Listeners`
+(override with `$PROXY_MCP_LAUNCHD_SOCKET`) and **omit** `KeepAlive`, so launchd
+starts the proxy on the first connection and `--idle-timeout` lets it exit when
+quiet — full parity with the systemd `.socket` path, zero resident footprint
+while idle. Drop this at `~/Library/LaunchAgents/dev.stubbe.proxy-mcp.plist` and
+`launchctl load` it:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>dev.stubbe.proxy-mcp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/proxy-mcp</string>
+    <string>--config</string>
+    <string>/opt/homebrew/etc/proxy-mcp/config.json</string>
+    <string>--idle-timeout=5m</string>
+  </array>
+  <key>Sockets</key>
+  <dict>
+    <key>Listeners</key>
+    <dict>
+      <key>SockNodeName</key>    <string>127.0.0.1</string>
+      <key>SockServiceName</key> <string>9090</string>
+    </dict>
+  </dict>
+</dict>
+</plist>
+```
+
+This is the on-demand alternative to the always-on `brew services` instance
+above; use one or the other, not both. (`brew services` keeps the proxy resident
+with `KeepAlive`; this lets it idle out.)
 
 ## Nix
 

@@ -41,7 +41,12 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           STAGE="proxy-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
           mkdir -p "dist/$STAGE"
-          export CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}
+          # cgo on for darwin: launchd socket activation (launch_activate_socket)
+          # needs it. Built natively on macos runners, so the SDK is present.
+          # Linux stays cgo-free for a fully static binary.
+          CGO_ENABLED=0
+          if [ "${{ matrix.goos }}" = "darwin" ]; then CGO_ENABLED=1; fi
+          export CGO_ENABLED GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}
           go build -trimpath \
             -ldflags="-s -w -X main.BuildVersion=${VERSION}" \
             -o "dist/$STAGE/proxy-mcp" .

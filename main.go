@@ -26,7 +26,12 @@ func main() {
 		fmt.Println(BuildVersion)
 		return
 	}
-	config, err := load(*conf, *insecure, *expandEnv, *httpHeaders, *httpTimeout)
+	// loadConfig re-reads the config with the same flags, so a reload (SIGHUP or
+	// config-file change) picks up edits without a restart.
+	loadConfig := func() (*Config, error) {
+		return load(*conf, *insecure, *expandEnv, *httpHeaders, *httpTimeout)
+	}
+	config, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -37,7 +42,7 @@ func main() {
 		fmt.Printf("config ok: %d server(s)\n", len(config.McpServers))
 		return
 	}
-	err = startHTTPServer(config, *idleTimeout)
+	err = startHTTPServer(config, *idleTimeout, loadConfig, *conf)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}

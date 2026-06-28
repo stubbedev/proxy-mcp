@@ -31,6 +31,12 @@ let
   serviceConfig = {
     Type = "notify";
     ExecStart = execStart;
+    # `systemctl reload proxy-mcp` sends SIGHUP, which makes proxy-mcp re-read
+    # its config and add/remove upstreams live (no restart, no dropped port).
+    # Most useful with configFile pointing at a mutable path; with store-
+    # generated settings the path is immutable, so a reload re-reads the same
+    # file (a switch that changes settings restarts the unit anyway).
+    ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
     Restart = "on-failure";
     RestartSec = 2;
   }

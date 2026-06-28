@@ -90,13 +90,13 @@ func (t *readinessTracker) report() readinessReport {
 //   - GET /healthz — liveness. Always 200 once the server is listening.
 //   - GET /readyz  — readiness. 503 until signalReady fires, then 200. The
 //     JSON body always reports per-upstream state and a degraded flag.
-func (t *readinessTracker) registerProbes(mux *http.ServeMux) {
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+func (t *readinessTracker) registerProbes(mux handlerMux) {
+	mux.Handle("/healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+	}))
+	mux.Handle("/readyz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		rep := t.report()
 		code := http.StatusServiceUnavailable
 		if rep.Ready {
@@ -105,7 +105,15 @@ func (t *readinessTracker) registerProbes(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(rep)
-	})
+	}))
+}
+
+// remove drops an upstream from the readiness report (used when a reload removes
+// it from the config).
+func (t *readinessTracker) remove(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.upstreams, name)
 }
 
 // signalReady marks the proxy ready: it flips the /readyz gate to 200, logs a
