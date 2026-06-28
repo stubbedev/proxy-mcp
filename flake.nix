@@ -22,7 +22,7 @@
         # changes go.sum — `just sync-flake` (and CI) regenerates it; `nix
         # build` prints the expected hash on mismatch.
         # go-sum: 706bf345d590fa9bd522fadb695f083a8728741e1bc737e7ea6c77a026e90dc1
-        vendorHash = "sha256-F6dka+fn1pKTNn8X939My04LEguY2gWvdc1X2VSvjG4=";
+        vendorHash = "sha256-CGHjLN2tP5nfNpoA4Xp++Gr5hEBq5itGjsBH7lgK3vg=";
         ldflags = [
           "-s"
           "-w"
