@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"crypto/tls"
@@ -58,17 +58,36 @@ const (
 	ToolFilterModeBlock ToolFilterMode = "block"
 )
 
+// ConnMode selects how an upstream's connection is shared across downstream
+// clients. The values are the single source for both perSession() and the
+// generated config schema.
+type ConnMode string
+
+const (
+	ConnModePerSession ConnMode = "perSession"
+	ConnModeShared     ConnMode = "shared"
+)
+
 type ToolFilterConfig struct {
+	// Mode is "allow" (expose only listed tools) or "block" (hide listed tools).
 	Mode ToolFilterMode `json:"mode,omitempty"`
-	List []string       `json:"list,omitempty"`
+	// List is the tool names the mode applies to.
+	List []string `json:"list,omitempty"`
 }
 
 type OptionsV2 struct {
+	// PanicIfInvalid aborts startup if this (eager) upstream fails to connect,
+	// instead of degrading.
 	PanicIfInvalid optional.Field[bool] `json:"panicIfInvalid"`
-	LogEnabled     optional.Field[bool] `json:"logEnabled"`
-	AuthTokens     []string             `json:"authTokens,omitempty"`
-	ToolFilter     *ToolFilterConfig    `json:"toolFilter,omitempty"`
-	Disabled       bool                 `json:"disabled,omitempty"`
+	// LogEnabled logs each request to this upstream's route.
+	LogEnabled optional.Field[bool] `json:"logEnabled"`
+	// AuthTokens are the bearer tokens accepted on this route. Inherited from
+	// mcpProxy.options when unset.
+	AuthTokens []string `json:"authTokens,omitempty"`
+	// ToolFilter optionally allow- or block-lists this upstream's tools.
+	ToolFilter *ToolFilterConfig `json:"toolFilter,omitempty"`
+	// Disabled skips this upstream entirely (no route, no connection).
+	Disabled bool `json:"disabled,omitempty"`
 	// CallTimeout bounds each forwarded request to this upstream (tool call,
 	// prompt get, resource read, completion). A Go duration string like "30s";
 	// empty or "0" means no timeout. Invalid values are ignored (logged).
@@ -82,7 +101,7 @@ type OptionsV2 struct {
 	//       (an upstream request can't be attributed to one of N clients).
 	// Use "shared" for a singleton backend you want exactly one of (e.g. a
 	// browser); use the default for everything else.
-	Mode string `json:"mode,omitempty"`
+	Mode ConnMode `json:"mode,omitempty"`
 	// IdleTimeout, when set (a Go duration like "5m"), makes this upstream
 	// lazy: its backend process is NOT started at boot but on the first request
 	// to its route, and is torn down again after this much idle time, then
@@ -97,7 +116,7 @@ type OptionsV2 struct {
 // perSession reports whether this upstream uses a dedicated connection per
 // downstream client (the default). Only "shared" opts out.
 func (o *OptionsV2) perSession() bool {
-	return o == nil || o.Mode != "shared"
+	return o == nil || o.Mode != ConnModeShared
 }
 
 // callTimeout parses CallTimeout into a duration. Returns 0 (no timeout) when
@@ -129,26 +148,44 @@ func (o *OptionsV2) idleTimeout() time.Duration {
 }
 
 type MCPProxyConfigV2 struct {
-	BaseURL string        `json:"baseURL"`
-	Addr    string        `json:"addr"`
-	Name    string        `json:"name"`
-	Version string        `json:"version"`
-	Type    MCPServerType `json:"type,omitempty"`
-	Options *OptionsV2    `json:"options,omitempty"`
+	// BaseURL is the public URL clients reach the proxy at (e.g.
+	// http://127.0.0.1:9090); its path becomes the mount prefix for every route.
+	BaseURL string `json:"baseURL"`
+	// Addr is the listen address, e.g. ":9090" or "127.0.0.1:9090". Ignored under
+	// socket activation.
+	Addr string `json:"addr"`
+	// Name is the proxy server name advertised to downstream clients.
+	Name string `json:"name"`
+	// Version is the proxy server version advertised to downstream clients.
+	Version string `json:"version"`
+	// Type is the transport the proxy serves to clients. Defaults to sse.
+	Type MCPServerType `json:"type,omitempty"`
+	// Options set here are the defaults inherited by every upstream (authTokens,
+	// panicIfInvalid, logEnabled).
+	Options *OptionsV2 `json:"options,omitempty"`
 }
 
 type MCPClientConfigV2 struct {
+	// TransportType is the upstream transport. Optional: inferred from
+	// command/url when omitted (command => stdio, url => sse/streamable-http).
 	TransportType MCPClientType `json:"transportType,omitempty"`
 
-	// Stdio
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	// Command is the stdio backend executable to run.
+	Command string `json:"command,omitempty"`
+	// Args are the stdio command's arguments.
+	Args []string `json:"args,omitempty"`
+	// Env adds environment variables to the stdio backend (merged over the
+	// proxy's own env). $VAR is expanded when --expand-env is on.
+	Env map[string]string `json:"env,omitempty"`
 
-	// SSE or Streamable HTTP
-	URL     string            `json:"url,omitempty"`
+	// URL is the sse/streamable-http upstream endpoint.
+	URL string `json:"url,omitempty"`
+	// Headers are static headers added to every request to an sse/streamable-http
+	// upstream.
 	Headers map[string]string `json:"headers,omitempty"`
-	Timeout time.Duration     `json:"timeout,omitempty"`
+	// Timeout bounds the streamable-http handshake (nanoseconds, Go
+	// time.Duration JSON form). Prefer options.callTimeout for per-call bounds.
+	Timeout time.Duration `json:"timeout,omitempty"`
 
 	Options *OptionsV2 `json:"options,omitempty"`
 }
@@ -183,7 +220,10 @@ func parseMCPClientConfigV2(conf *MCPClientConfigV2) (any, error) {
 // ---- Config ----
 
 type Config struct {
-	McpProxy   *MCPProxyConfigV2             `json:"mcpProxy"`
+	// Schema optionally points at this config's JSON Schema, so editors validate
+	// the file. Ignored by the loader.
+	Schema     string                        `json:"$schema,omitempty"`
+	McpProxy   *MCPProxyConfigV2             `json:"mcpProxy"          jsonschema:"required"`
 	McpServers map[string]*MCPClientConfigV2 `json:"mcpServers"`
 }
 

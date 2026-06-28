@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/stubbedev/proxy-mcp/master/config.schema.json",
+  "$defs": {
+    "MCPClientConfigV2": {
+      "properties": {
+        "transportType": {
+          "type": "string",
+          "enum": [
+            "stdio",
+            "sse",
+            "streamable-http"
+          ],
+          "description": "TransportType is the upstream transport. Optional: inferred from\ncommand/url when omitted (command =\u003e stdio, url =\u003e sse/streamable-http)."
+        },
+        "command": {
+          "type": "string",
+          "description": "Command is the stdio backend executable to run."
+        },
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Args are the stdio command's arguments."
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object",
+          "description": "Env adds environment variables to the stdio backend (merged over the\nproxy's own env). $VAR is expanded when --expand-env is on."
+        },
+        "url": {
+          "type": "string",
+          "description": "URL is the sse/streamable-http upstream endpoint."
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object",
+          "description": "Headers are static headers added to every request to an sse/streamable-http\nupstream."
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout bounds the streamable-http handshake (nanoseconds, Go\ntime.Duration JSON form). Prefer options.callTimeout for per-call bounds."
+        },
+        "options": {
+          "$ref": "#/$defs/OptionsV2"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "MCPProxyConfigV2": {
+      "properties": {
+        "baseURL": {
+          "type": "string",
+          "description": "BaseURL is the public URL clients reach the proxy at (e.g.\nhttp://127.0.0.1:9090); its path becomes the mount prefix for every route."
+        },
+        "addr": {
+          "type": "string",
+          "description": "Addr is the listen address, e.g. \":9090\" or \"127.0.0.1:9090\". Ignored under\nsocket activation."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name is the proxy server name advertised to downstream clients."
+        },
+        "version": {
+          "type": "string",
+          "description": "Version is the proxy server version advertised to downstream clients."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "sse",
+            "streamable-http"
+          ],
+          "description": "Type is the transport the proxy serves to clients. Defaults to sse."
+        },
+        "options": {
+          "$ref": "#/$defs/OptionsV2",
+          "description": "Options set here are the defaults inherited by every upstream (authTokens,\npanicIfInvalid, logEnabled)."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "OptionsV2": {
+      "properties": {
+        "panicIfInvalid": {
+          "type": "boolean",
+          "description": "PanicIfInvalid aborts startup if this (eager) upstream fails to connect,\ninstead of degrading."
+        },
+        "logEnabled": {
+          "type": "boolean",
+          "description": "LogEnabled logs each request to this upstream's route."
+        },
+        "authTokens": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "AuthTokens are the bearer tokens accepted on this route. Inherited from\nmcpProxy.options when unset."
+        },
+        "toolFilter": {
+          "$ref": "#/$defs/ToolFilterConfig",
+          "description": "ToolFilter optionally allow- or block-lists this upstream's tools."
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "Disabled skips this upstream entirely (no route, no connection)."
+        },
+        "callTimeout": {
+          "type": "string",
+          "description": "CallTimeout bounds each forwarded request to this upstream (tool call,\nprompt get, resource read, completion). A Go duration string like \"30s\";\nempty or \"0\" means no timeout. Invalid values are ignored (logged)."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "perSession",
+            "shared"
+          ],
+          "description": "Mode selects how upstream connections are shared across downstream clients:\n  \"perSession\" (default) — one dedicated upstream connection per client,\n      giving full transparency including server→client requests\n      (sampling/roots/elicitation), routed 1:1 to the right client.\n  \"shared\" — a single upstream connection multiplexed across all clients\n      (one backend process). Server→client requests are not bridged\n      (an upstream request can't be attributed to one of N clients).\nUse \"shared\" for a singleton backend you want exactly one of (e.g. a\nbrowser); use the default for everything else."
+        },
+        "idleTimeout": {
+          "type": "string",
+          "description": "IdleTimeout, when set (a Go duration like \"5m\"), makes this upstream\nlazy: its backend process is NOT started at boot but on the first request\nto its route, and is torn down again after this much idle time, then\nre-started lazily on the next request. Empty/\"0\" keeps the upstream eager\n(connected at boot, never torn down). This is per-upstream and\nindependent of the process-level --idle-timeout, which exits the whole\nproxy: several lazy upstreams can share one process, each retiring its own\nbackend on its own clock."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ToolFilterConfig": {
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "block"
+          ],
+          "description": "Mode is \"allow\" (expose only listed tools) or \"block\" (hide listed tools)."
+        },
+        "list": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "List is the tool names the mode applies to."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Schema optionally points at this config's JSON Schema, so editors validate\nthe file. Ignored by the loader."
+    },
+    "mcpProxy": {
+      "$ref": "#/$defs/MCPProxyConfigV2"
+    },
+    "mcpServers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/MCPClientConfigV2"
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "mcpProxy"
+  ],
+  "title": "proxy-mcp config",
+  "description": "Configuration for proxy-mcp, the aggregating MCP proxy. Generated from the Go config structs by `go run ./cmd/schemagen` — do not edit by hand."
+}

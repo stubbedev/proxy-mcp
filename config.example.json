@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/stubbedev/proxy-mcp/master/config.schema.json",
   "mcpProxy": {
     "baseURL": "http://127.0.0.1:9090",
     "addr": "127.0.0.1:9090",

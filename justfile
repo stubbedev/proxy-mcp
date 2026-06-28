@@ -60,7 +60,11 @@ lint-check:
 test:
     go test ./...
 
-check: lint test sync-flake
+# Regenerate config.schema.json from the Go config structs (single source).
+schema:
+    go run ./cmd/schemagen > config.schema.json
+
+check: lint test sync-flake schema
 
 clean:
     rm -rf bin/

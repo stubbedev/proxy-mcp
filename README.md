@@ -128,6 +128,7 @@ Minimal shape:
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/stubbedev/proxy-mcp/master/config.schema.json",
   "mcpProxy": {
     "baseURL": "http://localhost:9090",
     "addr": ":9090",
@@ -143,6 +144,13 @@ Minimal shape:
 
 `config.example.json` is an exhaustive worked example exercising every field
 below across stdio, SSE, and streamable-HTTP upstreams.
+
+The optional `$schema` line points editors at
+[`config.schema.json`](https://raw.githubusercontent.com/stubbedev/proxy-mcp/master/config.schema.json),
+which gives autocomplete and inline validation in VS Code and other JSON-Schema
+aware editors. It is generated from the Go config structs (`go run
+./cmd/schemagen` / `just schema`) and regenerated on every CI push, so it never
+drifts from what the proxy actually accepts — do not edit it by hand.
 
 ### `mcpProxy` — the proxy's own listener
 

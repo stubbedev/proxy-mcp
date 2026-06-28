@@ -28,6 +28,47 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  schema:
+    name: config schema in sync
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # real ref + write token so the master auto-commit can push back.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      # config.schema.json is generated from the Go config structs. Regenerate
+      # on every push; on master auto-commit any drift so the schema is always
+      # current, on PRs fail so the author regenerates and commits.
+      - name: regenerate config.schema.json
+        run: go run ./cmd/schemagen > config.schema.json
+      - name: assert schema in sync (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -n "$(git status --porcelain config.schema.json)" ]; then
+            echo "::error::config.schema.json is out of date. Run 'just schema' (or 'go run ./cmd/schemagen > config.schema.json') and commit."
+            git --no-pager diff config.schema.json
+            exit 1
+          fi
+      - name: auto-commit schema (master)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          if [ -z "$(git status --porcelain config.schema.json)" ]; then
+            echo "schema already in sync; nothing to commit."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add config.schema.json
+          git commit -m 'chore: auto-regenerate config.schema.json [skip ci]'
+          git push origin HEAD:master
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
