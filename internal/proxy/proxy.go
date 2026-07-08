@@ -125,6 +125,7 @@ type upstream struct {
 	server      *mcp.Server
 	perSession  bool
 	callTimeout time.Duration
+	matcher     *repoMatcher // nil unless repoWhitelist is set
 
 	// Lazy lifecycle (idleTimeout > 0). The backend is connected on the first
 	// request and torn down after idleTimeout of silence, then re-connected on
@@ -172,6 +173,7 @@ func newUpstream(name string, proxyCfg *MCPProxyConfigV2, clientCfg *MCPClientCo
 		perSession:  clientCfg.Options.perSession(),
 		callTimeout: clientCfg.Options.callTimeout(),
 		idleTimeout: clientCfg.Options.idleTimeout(),
+		matcher:     newRepoMatcher(name, clientCfg.Options.RepoWhitelist),
 		sessions:    make(map[string]*sessConn),
 	}
 	if u.idleTimeout > 0 {
@@ -187,6 +189,10 @@ func newUpstream(name string, proxyCfg *MCPProxyConfigV2, clientCfg *MCPClientCo
 	})
 	// Forward logging/setLevel to the caller's upstream connection.
 	u.server.AddReceivingMiddleware(u.serverMiddleware)
+	// Gate advertised capabilities by the client's repo when a whitelist is set.
+	if u.matcher != nil {
+		u.server.AddReceivingMiddleware(u.gateMiddleware)
+	}
 	return u
 }
 
@@ -607,6 +613,55 @@ func (u *upstream) serverMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			}
 		}
 		return next(ctx, method, req)
+	}
+}
+
+// gateMiddleware suppresses tools/prompts/resources listings for a client whose
+// workspace does not resolve to a whitelisted repo, returning an empty list so
+// the upstream stays connected but advertises nothing. It fails closed: a
+// client that exposes no workspace signal matches nothing and sees empty lists.
+//
+// ponytail: re-resolves the client's repo (a roots round-trip + a couple of git
+// execs) on every list request. List requests are rare per session (once at
+// connect, again on a capability change), so this is cheap in practice; add a
+// per-session cache if a client is found to spam list requests.
+func (u *upstream) gateMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		switch method {
+		case "tools/list", "prompts/list", "resources/list", "resources/templates/list":
+			if !u.advertiseTo(ctx, req) {
+				log.Printf("<%s> %s hidden: client repo not in whitelist", u.name, method)
+				return emptyListResult(method), nil
+			}
+		}
+		return next(ctx, method, req)
+	}
+}
+
+// advertiseTo reports whether this upstream should advertise its capabilities to
+// the request's client, i.e. the client's workspace matches the whitelist.
+func (u *upstream) advertiseTo(ctx context.Context, req mcp.Request) bool {
+	ss, _ := sessionOf(req)
+	var hdr http.Header
+	if extra := req.GetExtra(); extra != nil {
+		hdr = extra.Header
+	}
+	dirs := clientRepoDirs(ctx, ss, hdr)
+	return u.matcher.matches(ctx, dirs)
+}
+
+// emptyListResult returns a zero-length result of the type the SDK expects for
+// each list method, so a gated client gets a well-formed empty listing.
+func emptyListResult(method string) mcp.Result {
+	switch method {
+	case "prompts/list":
+		return &mcp.ListPromptsResult{}
+	case "resources/list":
+		return &mcp.ListResourcesResult{}
+	case "resources/templates/list":
+		return &mcp.ListResourceTemplatesResult{}
+	default:
+		return &mcp.ListToolsResult{}
 	}
 }
 

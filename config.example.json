@@ -31,7 +31,8 @@
       "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_TOKEN" },
       "options": {
         "panicIfInvalid": true,
-        "toolFilter": { "mode": "block", "list": ["create_or_update_file"] }
+        "toolFilter": { "mode": "block", "list": ["create_or_update_file"] },
+        "repoWhitelist": ["/Users/abs/git/work/backend", "git@github.com:acme/backend.git"]
       }
     },
     "browser": {

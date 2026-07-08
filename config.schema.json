@@ -127,6 +127,13 @@
         "idleTimeout": {
           "type": "string",
           "description": "IdleTimeout, when set (a Go duration like \"5m\"), makes this upstream\nlazy: its backend process is NOT started at boot but on the first request\nto its route, and is torn down again after this much idle time, then\nre-started lazily on the next request. Empty/\"0\" keeps the upstream eager\n(connected at boot, never torn down). This is per-upstream and\nindependent of the process-level --idle-timeout, which exits the whole\nproxy: several lazy upstreams can share one process, each retiring its own\nbackend on its own clock."
+        },
+        "repoWhitelist": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "RepoWhitelist gates this upstream's advertised capabilities by the\ndownstream client's repository. When non-empty, tools/prompts/resources\nare only listed to a client whose workspace resolves to one of these\nrepos; other clients see an empty list (the upstream still connects).\nEach entry is either a local directory (matched worktree-aware via the\ngit common dir, so the repo and every worktree of it match) or a git\nremote URL (matched against the client repo's remotes, normalized across\nssh/https and a trailing \".git\"). A client that exposes no workspace\nsignal (no roots, no header) matches nothing — gating fails closed."
         }
       },
       "additionalProperties": false,
