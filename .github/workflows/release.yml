@@ -62,11 +62,11 @@ jobs:
           retention-days: 7
 
   cache:
-    name: push nix build to attic
+    name: push nix build to xilo
     # Build the nix package for this tag and push its closure to the
-    # self-hosted attic cache (nix.stubbe.dev/default) so `nix run`/flake
-    # consumers and the dotfiles substituter pull a prebuilt binary instead
-    # of recompiling. Independent of the Go release artifacts above.
+    # self-hosted xilo cache (nix.stubbe.dev/c/default/default) so `nix run`/
+    # flake consumers and the dotfiles substituter pull a prebuilt binary
+    # instead of recompiling. Independent of the Go release artifacts above.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -76,23 +76,27 @@ jobs:
       - name: Build package
         run: nix build .#proxy-mcp -L --print-out-paths | tee /tmp/proxy-mcp-outpaths
 
-      - name: Push to attic
+      - name: setup xilo
+        uses: stubbedev/xilo@v1
+        with:
+          url: https://nix.stubbe.dev
+          cache: default
+          token: ${{ secrets.XILO_TOKEN }}
+
+      - name: Push to xilo
         # Best-effort: a cache-push failure (e.g. a transient 504 from the
         # single-vCPU cache box on a large closure) must not redden a release.
         # Retry with backoff, then give up softly.
         continue-on-error: true
-        env:
-          ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
         run: |
-          nix run nixpkgs#attic-client -- login stubbe https://nix.stubbe.dev "$ATTIC_TOKEN"
           for attempt in 1 2 3; do
-            if nix run nixpkgs#attic-client -- push default $(cat /tmp/proxy-mcp-outpaths); then
+            if xilo push default $(cat /tmp/proxy-mcp-outpaths); then
               exit 0
             fi
-            echo "::warning::attic push attempt $attempt failed; retrying in $((attempt * 30))s"
+            echo "::warning::xilo push attempt $attempt failed; retrying in $((attempt * 30))s"
             sleep $((attempt * 30))
           done
-          echo "::warning::attic push failed after 3 attempts; cache push is best-effort, continuing"
+          echo "::warning::xilo push failed after 3 attempts; cache push is best-effort, continuing"
 
   docker:
     name: build + push docker image
