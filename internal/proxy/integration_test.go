@@ -230,3 +230,23 @@ func TestProxyCallTimeout(t *testing.T) {
 		t.Fatalf("call timeout slow: %s", elapsed)
 	}
 }
+
+func TestProxyForwardsInstructions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const want = "Preferred shell for this session."
+	srv := mcp.NewServer(&mcp.Implementation{Name: "up", Version: "1.0.0"}, &mcp.ServerOptions{
+		HasTools:     true,
+		Instructions: want,
+	})
+	s := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil))
+	t.Cleanup(s.Close)
+
+	proxyURL := startProxyFor(ctx, t, streamableCfg(s.URL))
+	down := dialDownstream(ctx, t, proxyURL, nil)
+
+	if got := down.InitializeResult().Instructions; got != want {
+		t.Fatalf("instructions: got %q, want %q", got, want)
+	}
+}

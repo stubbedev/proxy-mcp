@@ -144,6 +144,13 @@ type upstream struct {
 	// clientFor can snapshot it without ordering against connMu.
 	gen atomic.Uint64
 
+	// instructions caches the backend's initialize instructions so
+	// serverMiddleware can forward them to downstream clients (the proxy's own
+	// mcp.Server would otherwise answer initialize with none). Written on every
+	// connect, kept across idle teardowns so a client that initialized against
+	// a torn-down lazy backend still gets the last known text.
+	instructions atomic.Value // string
+
 	mu       sync.RWMutex
 	baseCtx  context.Context
 	tmpl     *sessConn
@@ -288,6 +295,9 @@ func (u *upstream) connect(ctx context.Context) error {
 	u.baseCtx = ctx
 	u.tmpl = sc
 	u.mu.Unlock()
+	if init := sc.cs.InitializeResult(); init != nil && init.Instructions != "" {
+		u.instructions.Store(init.Instructions)
+	}
 	u.registerCapabilities(ctx)
 	safeGo(u.name, func() { u.watchTemplate(ctx, sc.cs) })
 	if u.perSession {
@@ -598,7 +608,8 @@ func (u *upstream) handleUnsubscribe(ctx context.Context, req *mcp.UnsubscribeRe
 }
 
 // serverMiddleware forwards logging/setLevel to the caller's upstream session,
-// in addition to the server's own per-session bookkeeping.
+// and grafts the backend's instructions onto the proxy's initialize response so
+// clients see them (the proxy's own mcp.Server has none of its own).
 func (u *upstream) serverMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		if method == "logging/setLevel" {
@@ -612,7 +623,15 @@ func (u *upstream) serverMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 				}
 			}
 		}
-		return next(ctx, method, req)
+		res, err := next(ctx, method, req)
+		if method == "initialize" && err == nil {
+			if ir, ok := res.(*mcp.InitializeResult); ok {
+				if s, _ := u.instructions.Load().(string); s != "" {
+					ir.Instructions = s
+				}
+			}
+		}
+		return res, err
 	}
 }
 
