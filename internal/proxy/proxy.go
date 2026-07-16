@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -92,6 +93,15 @@ func buildTransport(ctx context.Context, conf *MCPClientConfigV2) (mcp.Transport
 		cmd.Env = os.Environ()
 		for k, val := range v.Env {
 			cmd.Env = append(cmd.Env, k+"="+val)
+		}
+		// Run the child in its own process group and kill the whole group on
+		// teardown. The default CommandContext cancel (and the SDK's Close
+		// escalation) signals only the direct child — an npx-style backend
+		// wraps the real server in sh/node grandchildren that would survive
+		// and leak.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		return &mcp.CommandTransport{Command: cmd}, nil
 	case *StreamableMCPClientConfig:
