@@ -21,8 +21,8 @@
         # build is reproducible. Bump after any `go get` / `go mod tidy` that
         # changes go.sum — `just sync-flake` (and CI) regenerates it; `nix
         # build` prints the expected hash on mismatch.
-        # go-sum: b20492a9ae498eb2dbb97d15835b2c5dd523d127e2bf7e70d2f81a1a3a30d849
-        vendorHash = "sha256-nI2b/pLo/At51W/avMZJHXywQujT41U6HPnYujhT5aM=";
+        # go-sum: 46914f0ce25648ba8deda54bdb16927f17c7ccd2f40f4fb3a4e861cb56a8396f
+        vendorHash = "sha256-dOHO7AdPifpQulfXbH5iVkxXoNVkqtssq8rhDrtoEYE=";
         ldflags = [
           "-s"
           "-w"
