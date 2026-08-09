@@ -122,7 +122,7 @@
             "perSession",
             "shared"
           ],
-          "description": "Mode selects how upstream connections are shared across downstream clients:\n  \"perSession\" (default) — one dedicated upstream connection per client,\n      giving full transparency including server→client requests\n      (sampling/roots/elicitation), routed 1:1 to the right client.\n  \"shared\" — a single upstream connection multiplexed across all clients\n      (one backend process). Server→client requests are not bridged\n      (an upstream request can't be attributed to one of N clients).\nUse \"shared\" for a singleton backend you want exactly one of (e.g. a\nbrowser); use the default for everything else."
+          "description": "Mode selects how upstream connections are shared across downstream clients:\n  \"perSession\" (default) — one dedicated upstream connection per client,\n      giving full transparency including server→client requests\n      (sampling/roots/elicitation), routed 1:1 to the right client.\n  \"shared\" — a single upstream connection multiplexed across all clients\n      (one backend process). A server→client REQUEST is not bridged here:\n      arriving on the one shared session, it can't be attributed to one\n      of N clients. A backend on MCP \u003e= 2026-07-28 is unaffected — it\n      asks by returning InputRequests on the result of a call (SEP-2322),\n      which is already tied to the caller, so sampling/elicitation/roots\n      reach the right client even through a shared process.\nUse \"shared\" for a singleton backend you want exactly one of (e.g. a\nbrowser); use the default for everything else."
         },
         "idleTimeout": {
           "type": "string",

@@ -149,13 +149,24 @@ func gitRemotes(ctx context.Context, dir string) []string {
 	return res
 }
 
-// clientRepoDirs collects the client's candidate workspace directories from its
-// MCP roots (fetched on demand) and the X-Mcp-Roots / X-Mcp-Cwd headers, as
+// repoHeaders are the request headers a client (or a fronting harness) may use
+// to declare its workspace, in the order they are collected. X-Repo-Root is the
+// convention the rest of this fleet already reads (jenkins-mcp, srv, treeman);
+// the X-Mcp-* forms predate it and stay supported.
+var repoHeaders = []string{"X-Repo-Root", "X-Mcp-Roots", "X-Mcp-Root", "X-Mcp-Cwd"}
+
+// clientRepoDirs collects the client's candidate workspace directories from the
+// repoHeaders and, for clients that still allow it, its MCP roots, as
 // filesystem paths. file:// root URIs are converted to paths; non-file roots
 // are ignored (they can't be a local repo).
+//
+// Headers are the durable signal: MCP 2026-07-28 (SEP-2322/2575) forbids
+// server-initiated requests, so roots/list simply stops being answerable. This
+// gate fails CLOSED, so a client that only ever spoke roots would silently lose
+// every whitelisted tool — hence rootsUsable, and hence X-Repo-Root above.
 func clientRepoDirs(ctx context.Context, ss *mcp.ServerSession, hdr map[string][]string) []string {
 	var dirs []string
-	if ss != nil {
+	if rootsUsable(ss) {
 		if res, err := ss.ListRoots(ctx, nil); err == nil {
 			for _, r := range res.Roots {
 				if p := fileURIToPath(r.URI); p != "" {
@@ -164,7 +175,7 @@ func clientRepoDirs(ctx context.Context, ss *mcp.ServerSession, hdr map[string][
 			}
 		}
 	}
-	for _, h := range []string{"X-Mcp-Roots", "X-Mcp-Cwd"} {
+	for _, h := range repoHeaders {
 		for _, v := range hdr[h] {
 			for _, part := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ';' }) {
 				part = strings.TrimSpace(part)
@@ -189,4 +200,29 @@ func fileURIToPath(s string) string {
 		return u.Path
 	}
 	return ""
+}
+
+// rootsRemovedFrom is the first protocol revision that forbids server-initiated
+// JSON-RPC requests (SEP-2322 / SEP-2575). From there on roots/list can only be
+// requested as an InputRequest from a tool handler, so the plain call below is
+// dead weight. ISO dates compare correctly as strings.
+const rootsRemovedFrom = "2026-07-28"
+
+// rootsUsable reports whether the proxy may still ask this downstream client
+// for its roots: it advertised the capability, and it negotiated a protocol
+// version where a server is allowed to ask.
+func rootsUsable(ss *mcp.ServerSession) bool {
+	if ss == nil {
+		return false
+	}
+	return rootsAllowed(ss.InitializeParams())
+}
+
+// rootsAllowed is rootsUsable's decision, split out so it can be tested without
+// a live session.
+func rootsAllowed(ip *mcp.InitializeParams) bool {
+	if ip == nil || ip.Capabilities == nil || ip.ProtocolVersion >= rootsRemovedFrom {
+		return false
+	}
+	return ip.Capabilities.RootsV2 != nil
 }

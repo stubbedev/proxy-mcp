@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/go-sphere/confstore v0.0.4
 	github.com/invopop/jsonschema v0.14.0
-	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/spf13/pflag v1.0.10
 	github.com/tbxark/optional-go v0.0.2
 	golang.org/x/sync v0.21.0
@@ -22,4 +22,5 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )

@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestNormalizeRemote(t *testing.T) {
@@ -89,5 +91,62 @@ func TestMatcherWorktreeAndRemote(t *testing.T) {
 	}
 	if remote.matches(context.Background(), []string{unrelated}) {
 		t.Error("unrelated repo has no matching remote")
+	}
+}
+
+// TestClientRepoDirsHeaders pins the header path of the repo gate. It is the
+// only path left once a client negotiates MCP >= 2026-07-28, where roots/list
+// can no longer be asked for — and because the gate fails closed, a header the
+// fleet sends but this list misses would silently hide every gated tool.
+func TestClientRepoDirsHeaders(t *testing.T) {
+	hdr := map[string][]string{
+		"X-Repo-Root": {"/w/repo"},
+		"X-Mcp-Roots": {"file:///w/a, /w/b"},
+		"X-Mcp-Root":  {"/w/c"},
+		"X-Mcp-Cwd":   {"/w/d"},
+		"X-Ignored":   {"/w/nope"},
+	}
+	// ss nil: no session, so roots are out of the picture entirely.
+	got := clientRepoDirs(context.Background(), nil, hdr)
+	want := []string{"/w/repo", "file:///w/a", "/w/b", "/w/c", "/w/d"}
+	// file:// entries are converted to paths.
+	want[1] = "/w/a"
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("dir %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if dirs := clientRepoDirs(context.Background(), nil, nil); len(dirs) != 0 {
+		t.Errorf("no headers should yield no dirs, got %v", dirs)
+	}
+}
+
+// TestRootsUsableProtocolGate: asking a client for roots is only legal below
+// 2026-07-28 (SEP-2322/2575 bans server-initiated requests from there on), and
+// only if the client advertised the capability at all.
+func TestRootsUsableProtocolGate(t *testing.T) {
+	if rootsUsable(nil) {
+		t.Error("nil session should not be roots-usable")
+	}
+	if rootsAllowed(nil) {
+		t.Error("nil params should not be roots-usable")
+	}
+	caps := &mcp.ClientCapabilities{RootsV2: &mcp.RootCapabilities{}}
+	for ver, want := range map[string]bool{
+		"2024-11-05": true,
+		"2025-11-25": true,
+		"2026-07-28": false,
+		"2027-03-01": false,
+	} {
+		ip := &mcp.InitializeParams{ProtocolVersion: ver, Capabilities: caps}
+		if got := rootsAllowed(ip); got != want {
+			t.Errorf("rootsAllowed(%s) = %v, want %v", ver, got, want)
+		}
+	}
+	if rootsAllowed(&mcp.InitializeParams{ProtocolVersion: "2025-11-25"}) {
+		t.Error("client without the roots capability should not be roots-usable")
 	}
 }

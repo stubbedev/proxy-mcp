@@ -126,8 +126,10 @@ func buildTransport(ctx context.Context, conf *MCPClientConfigV2) (mcp.Transport
 // fallback. In per-session mode (default) each downstream client also gets a
 // dedicated upstream session whose sampling/roots/elicitation handlers target
 // that client 1:1 — full server→client bridging. In shared mode every client
-// multiplexes onto the template (one backend process), without server→client
-// requests.
+// multiplexes onto the template (one backend process), so an inbound
+// server→client REQUEST can't be attributed and isn't bridged; a backend on MCP
+// >= 2026-07-28 instead asks via InputRequests on the call result, which is
+// attributed to the caller and so works in either mode.
 type upstream struct {
 	name        string
 	clientCfg   *MCPClientConfigV2
@@ -350,7 +352,22 @@ func (u *upstream) reconnect(ctx context.Context) {
 // notification relay all target it. The template (downstream nil) only
 // enumerates and broadcasts list-changed.
 func (u *upstream) dial(ctx context.Context, downstream *mcp.ServerSession) (*sessConn, error) {
-	opts := &mcp.ClientOptions{}
+	// Never let the SDK fulfil an upstream's input requests here. From MCP
+	// 2026-07-28 (SEP-2322) an upstream asks for sampling/elicitation/roots by
+	// returning them as InputRequests in its result instead of calling back
+	// over the session. Those belong to the real client, not the proxy: with
+	// the middleware enabled the proxy would answer them itself via the
+	// handlers below, which then try a server→client call the new protocol
+	// forbids. Disabled, the input-required result travels downstream verbatim
+	// and the real client's own middleware answers it and retries — and the
+	// retry's responses ride params._meta, which toolHandler already forwards.
+	// Legacy downstream clients are still covered: the proxy's SERVER side
+	// keeps the SDK's matching middleware, which fulfils input requests by
+	// calling those clients directly.
+	opts := &mcp.ClientOptions{MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true}}
+	// Handlers for the pre-2026-07-28 path, where an upstream still issues
+	// sampling/elicitation as real server→client requests: relay them to the
+	// client this session is dedicated to.
 	if downstream != nil {
 		opts.CreateMessageHandler = func(ctx context.Context, req *mcp.CreateMessageRequest) (*mcp.CreateMessageResult, error) {
 			return downstream.CreateMessage(ctx, req.Params)
@@ -470,6 +487,14 @@ func (u *upstream) sessionFor(ss *mcp.ServerSession) (*mcp.ClientSession, error)
 // connection. AddRoots/RemoveRoots notify a connected upstream (roots/list_
 // changed), so an upstream that caches roots re-fetches and stays correct.
 func (u *upstream) syncRoots(ctx context.Context, downstream *mcp.ServerSession, sc *sessConn) {
+	if !rootsUsable(downstream) {
+		// Nothing to mirror: either the client never advertised roots, or it
+		// negotiated MCP >= 2026-07-28, where asking is forbidden. Such clients
+		// declare their workspace with the X-Repo-Root header instead, which
+		// headerRoundTripper already replays onto every upstream request — so
+		// the upstream still learns the repo, just not via roots.
+		return
+	}
 	res, err := downstream.ListRoots(ctx, &mcp.ListRootsParams{})
 	if err != nil {
 		return // downstream doesn't support roots — nothing to mirror
@@ -568,6 +593,12 @@ func (u *upstream) toolHandler(ctx context.Context, req *mcp.CallToolRequest) (*
 		Name:      req.Params.Name,
 		Arguments: req.Params.Arguments,
 		Meta:      req.Params.Meta,
+		// A retry after an input-required result carries the client's answers
+		// and the upstream's opaque state (SEP-2322). These are ordinary params
+		// fields, not _meta: drop them and the upstream never sees the answer,
+		// re-asks, and the client's retry loop spins until it gives up.
+		InputResponses: req.Params.InputResponses,
+		RequestState:   req.Params.RequestState,
 	})
 }
 

@@ -97,8 +97,12 @@ type OptionsV2 struct {
 	//       giving full transparency including server→client requests
 	//       (sampling/roots/elicitation), routed 1:1 to the right client.
 	//   "shared" — a single upstream connection multiplexed across all clients
-	//       (one backend process). Server→client requests are not bridged
-	//       (an upstream request can't be attributed to one of N clients).
+	//       (one backend process). A server→client REQUEST is not bridged here:
+	//       arriving on the one shared session, it can't be attributed to one
+	//       of N clients. A backend on MCP >= 2026-07-28 is unaffected — it
+	//       asks by returning InputRequests on the result of a call (SEP-2322),
+	//       which is already tied to the caller, so sampling/elicitation/roots
+	//       reach the right client even through a shared process.
 	// Use "shared" for a singleton backend you want exactly one of (e.g. a
 	// browser); use the default for everything else.
 	Mode ConnMode `json:"mode,omitempty"`

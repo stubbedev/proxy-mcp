@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -107,6 +109,52 @@ func TestSharedInstanceIsolatesClients(t *testing.T) {
 		}
 		if got := toolText(t, res); got != c.want {
 			t.Fatalf("shared-instance isolation: client saw roots %q, want %q", got, c.want)
+		}
+	}
+}
+
+// TestSharedStdioAttributesInputRequestsPerClient covers the arrangement the
+// proxied backends actually run in: ONE stdio child (mode "shared") multiplexed
+// across every window.
+//
+// That mode has always been documented as unable to bridge server→client
+// requests — with N clients on one upstream session, an inbound request can't
+// be attributed to any of them. MCP 2026-07-28 turns that around: the backend
+// asks by returning InputRequests on the RESULT of a call (SEP-2322), which is
+// already attributed to the caller. The proxy must pass that through untouched
+// (see the disabled multi-round-trip middleware in dial) and forward the
+// answers on the retry, so each client answers with its own workspace even
+// though they share one process.
+func TestSharedStdioAttributesInputRequestsPerClient(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	bin := filepath.Join(t.TempDir(), "server-requests")
+	if out, err := exec.Command("go", "build", "-o", bin, "./testdata/server-requests").CombinedOutput(); err != nil {
+		t.Fatalf("build stdio upstream: %v\n%s", err, out)
+	}
+	proxyURL := startProxyFor(ctx, t, &MCPClientConfigV2{
+		Command: bin,
+		Options: &OptionsV2{Mode: ConnModeShared},
+	})
+
+	clientA := dialWithRoots(ctx, t, proxyURL, "file:///repo-a")
+	clientB := dialWithRoots(ctx, t, proxyURL, "file:///repo-b")
+
+	for _, c := range []struct {
+		name string
+		cs   *mcp.ClientSession
+		want string
+	}{
+		{"a", clientA, "file:///repo-a"},
+		{"b", clientB, "file:///repo-b"},
+	} {
+		res, err := c.cs.CallTool(ctx, &mcp.CallToolParams{Name: "do_roots"})
+		if err != nil {
+			t.Fatalf("client %s do_roots: %v", c.name, err)
+		}
+		if got := toolText(t, res); got != c.want {
+			t.Errorf("client %s saw roots %q, want %q (shared child leaked another client's workspace)", c.name, got, c.want)
 		}
 	}
 }

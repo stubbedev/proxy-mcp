@@ -127,6 +127,12 @@ func TestPerSessionServerRequestsStdio(t *testing.T) {
 
 // TestPerSessionServerRequestsStreamable proves the same over a streamable-HTTP
 // upstream — the case mcp-go could not handle.
+//
+// This upstream lands on the pre-2026-07-28 handshake, so it exercises the
+// LEGACY route: the upstream issues real server→client requests mid-handler and
+// the proxy relays them through the sampling/elicitation handlers on the
+// per-session connection. Its stdio sibling covers the new SEP-2322 route.
+// Keep both — the fleet runs a mix of old and new backends.
 func TestPerSessionServerRequestsStreamable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
