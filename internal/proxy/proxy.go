@@ -715,13 +715,13 @@ func (u *upstream) advertiseTo(ctx context.Context, req mcp.Request) bool {
 func emptyListResult(method string) mcp.Result {
 	switch method {
 	case "prompts/list":
-		return &mcp.ListPromptsResult{}
+		return &mcp.ListPromptsResult{Prompts: []*mcp.Prompt{}}
 	case "resources/list":
-		return &mcp.ListResourcesResult{}
+		return &mcp.ListResourcesResult{Resources: []*mcp.Resource{}}
 	case "resources/templates/list":
-		return &mcp.ListResourceTemplatesResult{}
+		return &mcp.ListResourceTemplatesResult{ResourceTemplates: []*mcp.ResourceTemplate{}}
 	default:
-		return &mcp.ListToolsResult{}
+		return &mcp.ListToolsResult{Tools: []*mcp.Tool{}}
 	}
 }
 

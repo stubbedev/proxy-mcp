@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -148,5 +149,33 @@ func TestRootsUsableProtocolGate(t *testing.T) {
 	}
 	if rootsAllowed(&mcp.InitializeParams{ProtocolVersion: "2025-11-25"}) {
 		t.Error("client without the roots capability should not be roots-usable")
+	}
+}
+
+// TestEmptyListResultSerializesArrays guards strict MCP clients such as Codex,
+// which reject null for the protocol's required list fields.
+func TestEmptyListResultSerializesArrays(t *testing.T) {
+	for _, tt := range []struct {
+		method string
+		field  string
+	}{
+		{"tools/list", "tools"},
+		{"prompts/list", "prompts"},
+		{"resources/list", "resources"},
+		{"resources/templates/list", "resourceTemplates"},
+	} {
+		t.Run(tt.method, func(t *testing.T) {
+			encoded, err := json.Marshal(emptyListResult(tt.method))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &result); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(result[tt.field]); got != "[]" {
+				t.Fatalf("%s serialized as %s, want []", tt.field, got)
+			}
+		})
 	}
 }
