@@ -153,7 +153,7 @@ func TestRootsUsableProtocolGate(t *testing.T) {
 }
 
 // TestEmptyListResultSerializesArrays guards strict MCP clients such as Codex,
-// which reject null for the protocol's required list fields.
+// which require both an array list field and a valid SDK-added cache scope.
 func TestEmptyListResultSerializesArrays(t *testing.T) {
 	for _, tt := range []struct {
 		method string
@@ -175,6 +175,9 @@ func TestEmptyListResultSerializesArrays(t *testing.T) {
 			}
 			if got := string(result[tt.field]); got != "[]" {
 				t.Fatalf("%s serialized as %s, want []", tt.field, got)
+			}
+			if got := string(result["cacheScope"]); got != `"private"` {
+				t.Fatalf("cacheScope serialized as %s, want private", got)
 			}
 		})
 	}

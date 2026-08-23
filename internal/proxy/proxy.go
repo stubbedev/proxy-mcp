@@ -713,15 +713,21 @@ func (u *upstream) advertiseTo(ctx context.Context, req mcp.Request) bool {
 // emptyListResult returns a zero-length result of the type the SDK expects for
 // each list method, so a gated client gets a well-formed empty listing.
 func emptyListResult(method string) mcp.Result {
+	// The SDK normally fills this after a list handler returns, but middleware
+	// that short-circuits the handler must provide it itself. An empty string is
+	// not a valid MCP cache scope and strict clients deserialize the response as
+	// the wrong result type. Keep gated, repo-dependent responses private and
+	// immediately stale (the zero-value TTL).
+	cacheable := mcp.Cacheable{CacheScope: "private"}
 	switch method {
 	case "prompts/list":
-		return &mcp.ListPromptsResult{Prompts: []*mcp.Prompt{}}
+		return &mcp.ListPromptsResult{Cacheable: cacheable, Prompts: []*mcp.Prompt{}}
 	case "resources/list":
-		return &mcp.ListResourcesResult{Resources: []*mcp.Resource{}}
+		return &mcp.ListResourcesResult{Cacheable: cacheable, Resources: []*mcp.Resource{}}
 	case "resources/templates/list":
-		return &mcp.ListResourceTemplatesResult{ResourceTemplates: []*mcp.ResourceTemplate{}}
+		return &mcp.ListResourceTemplatesResult{Cacheable: cacheable, ResourceTemplates: []*mcp.ResourceTemplate{}}
 	default:
-		return &mcp.ListToolsResult{Tools: []*mcp.Tool{}}
+		return &mcp.ListToolsResult{Cacheable: cacheable, Tools: []*mcp.Tool{}}
 	}
 }
 
