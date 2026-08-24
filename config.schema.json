@@ -178,7 +178,7 @@
             "type": "string"
           },
           "type": "array",
-          "description": "RepoWhitelist gates this upstream's advertised capabilities by the\ndownstream client's repository. When non-empty, tools/prompts/resources\nare only listed to a client whose workspace resolves to one of these\nrepos; other clients see an empty list (the upstream still connects).\nEach entry is either a local directory (matched worktree-aware via the\ngit common dir, so the repo and every worktree of it match) or a git\nremote URL (matched against the client repo's remotes, normalized across\nssh/https and a trailing \".git\"). A client that exposes no workspace\nsignal (no roots, no header) matches nothing — gating fails closed."
+          "description": "RepoWhitelist gates this upstream's advertised capabilities by the\ndownstream client's repository. When non-empty, tools/prompts/resources\nare only listed to a client whose workspace resolves to one of these\nrepos; other clients see an empty list (the upstream still connects).\nEach entry is a local directory (matched worktree-aware via the git\ncommon dir, so the repo and every worktree of it match), a git remote URL\n(matched against the client repo's remotes, normalized across ssh/https\nand a trailing \".git\"), or a bare git host such as \"git.example.com\" or\n\"https://git.example.com\" (matches every repo cloned from that host,\nport-insensitively). A client that exposes no workspace signal (no roots,\nno header) matches nothing — gating fails closed."
         }
       },
       "additionalProperties": false,

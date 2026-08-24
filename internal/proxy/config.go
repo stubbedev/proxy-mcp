@@ -145,11 +145,13 @@ type OptionsV2 struct {
 	// downstream client's repository. When non-empty, tools/prompts/resources
 	// are only listed to a client whose workspace resolves to one of these
 	// repos; other clients see an empty list (the upstream still connects).
-	// Each entry is either a local directory (matched worktree-aware via the
-	// git common dir, so the repo and every worktree of it match) or a git
-	// remote URL (matched against the client repo's remotes, normalized across
-	// ssh/https and a trailing ".git"). A client that exposes no workspace
-	// signal (no roots, no header) matches nothing — gating fails closed.
+	// Each entry is a local directory (matched worktree-aware via the git
+	// common dir, so the repo and every worktree of it match), a git remote URL
+	// (matched against the client repo's remotes, normalized across ssh/https
+	// and a trailing ".git"), or a bare git host such as "git.example.com" or
+	// "https://git.example.com" (matches every repo cloned from that host,
+	// port-insensitively). A client that exposes no workspace signal (no roots,
+	// no header) matches nothing — gating fails closed.
 	RepoWhitelist []string `json:"repoWhitelist,omitempty"`
 }
 

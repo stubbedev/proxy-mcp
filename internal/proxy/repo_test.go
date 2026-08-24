@@ -95,6 +95,90 @@ func TestMatcherWorktreeAndRemote(t *testing.T) {
 	}
 }
 
+// TestHostEntry pins which whitelist entries gate a whole git host rather than
+// one repo. Getting this wrong is silent in both directions: a repo entry read
+// as a host over-shares, and a host entry read as a repo never matches.
+func TestHostEntry(t *testing.T) {
+	hosts := map[string]string{
+		"git.example.com":           "git.example.com",
+		"git.example.com:7999":      "git.example.com",
+		"https://git.example.com":   "git.example.com",
+		"https://git.example.com/":  "git.example.com",
+		"ssh://git@git.example.com": "git.example.com",
+		"HTTPS://Git.Example.COM":   "git.example.com",
+		"https://[::1]:7999":        "::1",
+	}
+	for in, want := range hosts {
+		if got := hostEntry(in); got != want {
+			t.Errorf("hostEntry(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Entries that name a repo, or a local dir, are not host patterns.
+	for _, in := range []string{
+		"https://github.com/o/r",
+		"git@github.com:o/r.git",
+		"github.com/o/r",
+		"/Users/abs/git/repo",
+		".",
+		"..",
+		"repo",
+		"./repo",
+	} {
+		if got := hostEntry(in); got != "" {
+			t.Errorf("hostEntry(%q) = %q, want \"\"", in, got)
+		}
+	}
+}
+
+// TestMatcherHostWhitelist: a host entry matches every repo cloned from that
+// host, across ssh/https and regardless of port, and nothing else. This is the
+// case a per-repo whitelist cannot express — a self-hosted forge where every
+// repo should see the tools but a github clone should not.
+func TestMatcherHostWhitelist(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	mk := func(remote string) string {
+		t.Helper()
+		dir := t.TempDir()
+		for _, args := range [][]string{{"init"}, {"remote", "add", "origin", remote}} {
+			cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		return dir
+	}
+	ssh := mk("ssh://git@git.example.com:7999/team/app.git")
+	scp := mk("git@git.example.com:team/other.git")
+	other := mk("git@github.com:o/r.git")
+	none := t.TempDir()
+	if out, err := exec.Command("git", "-C", none, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	m := newRepoMatcher("t", []string{"git.example.com"})
+	if m == nil {
+		t.Fatal("expected matcher")
+	}
+	ctx := context.Background()
+	if !m.matches(ctx, []string{ssh}) {
+		t.Error("ssh remote on a non-default port should match its host")
+	}
+	if !m.matches(ctx, []string{scp}) {
+		t.Error("scp-form remote should match its host")
+	}
+	if m.matches(ctx, []string{other}) {
+		t.Error("repo on another host should not match")
+	}
+	if m.matches(ctx, []string{none}) {
+		t.Error("repo with no remote should fail closed")
+	}
+	if m.matches(ctx, nil) {
+		t.Error("no dirs should fail closed")
+	}
+}
+
 // TestClientRepoDirsHeaders pins the header path of the repo gate. It is the
 // only path left once a client negotiates MCP >= 2026-07-28, where roots/list
 // can no longer be asked for — and because the gate fails closed, a header the

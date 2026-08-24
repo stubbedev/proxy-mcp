@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"log"
+	"net"
 	"net/url"
 	"os/exec"
 	"path/filepath"
@@ -19,16 +20,22 @@ const gitTimeout = 5 * time.Second
 // repoMatcher decides whether a downstream client's workspace belongs to a
 // whitelisted repo. Local whitelist entries are resolved to their git common
 // dir (so the repo and all its worktrees share one identity); remote entries
-// are normalized URLs matched against the client repo's configured remotes.
+// are normalized URLs matched against the client repo's configured remotes;
+// host entries match every repo hosted on a given git host.
 type repoMatcher struct {
 	commonDirs map[string]struct{} // resolved git common dirs of local entries
 	remotes    map[string]struct{} // normalized remote URLs
+	hosts      map[string]struct{} // bare git hosts, port-stripped
 }
 
 // newRepoMatcher builds a matcher from whitelist entries, resolving each local
-// path's git common dir now (the path exists at config-load time). Entries that
-// look like git remotes are normalized; the rest are treated as local dirs.
-// Returns nil when the list is empty (no gating).
+// path's git common dir now (the path exists at config-load time). An entry
+// that names a whole git host becomes a host pattern; one that looks like a git
+// remote is normalized; the rest are treated as local dirs. Returns nil when
+// the list is empty (no gating).
+//
+// A local path is tried BEFORE the host reading, so a directory that happens to
+// look like a hostname keeps its old meaning.
 func newRepoMatcher(name string, entries []string) *repoMatcher {
 	if len(entries) == 0 {
 		return nil
@@ -36,6 +43,7 @@ func newRepoMatcher(name string, entries []string) *repoMatcher {
 	m := &repoMatcher{
 		commonDirs: make(map[string]struct{}),
 		remotes:    make(map[string]struct{}),
+		hosts:      make(map[string]struct{}),
 	}
 	for _, e := range entries {
 		e = strings.TrimSpace(e)
@@ -43,17 +51,24 @@ func newRepoMatcher(name string, entries []string) *repoMatcher {
 			continue
 		}
 		if isRemoteURL(e) {
-			m.remotes[normalizeRemote(e)] = struct{}{}
+			if h := hostEntry(e); h != "" {
+				m.hosts[h] = struct{}{}
+			} else {
+				m.remotes[normalizeRemote(e)] = struct{}{}
+			}
 			continue
 		}
-		cd := gitCommonDir(context.Background(), e)
-		if cd == "" {
-			log.Printf("<%s> repoWhitelist entry %q is not a git repo; ignoring", name, e)
+		if cd := gitCommonDir(context.Background(), e); cd != "" {
+			m.commonDirs[cd] = struct{}{}
 			continue
 		}
-		m.commonDirs[cd] = struct{}{}
+		if h := hostEntry(e); h != "" {
+			m.hosts[h] = struct{}{}
+			continue
+		}
+		log.Printf("<%s> repoWhitelist entry %q is neither a git repo, a remote URL nor a git host; ignoring", name, e)
 	}
-	if len(m.commonDirs) == 0 && len(m.remotes) == 0 {
+	if len(m.commonDirs) == 0 && len(m.remotes) == 0 && len(m.hosts) == 0 {
 		return nil
 	}
 	return m
@@ -68,9 +83,12 @@ func (m *repoMatcher) matches(ctx context.Context, dirs []string) bool {
 				return true
 			}
 		}
-		if len(m.remotes) > 0 {
+		if len(m.remotes) > 0 || len(m.hosts) > 0 {
 			for _, r := range gitRemotes(ctx, dir) {
 				if _, ok := m.remotes[r]; ok {
+					return true
+				}
+				if _, ok := m.hosts[remoteHost(r)]; ok {
 					return true
 				}
 			}
@@ -95,6 +113,47 @@ func isRemoteURL(s string) bool {
 		}
 	}
 	return false
+}
+
+// hostEntry reports the bare git host a whitelist entry gates, or "" when the
+// entry names one specific repo instead. Both an explicit URL with no path
+// ("https://git.example.com") and a bare "git.example.com[:port]" name a host;
+// anything carrying a path component ("github.com/o/r") names a repo. The port
+// is stripped so it matches remotes regardless of how they are cloned — an ssh
+// remote on :7999 and its https twin on :443 are the same host.
+func hostEntry(e string) string {
+	s := strings.ToLower(strings.TrimSpace(e))
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil || u.Host == "" || strings.Trim(u.Path, "/") != "" {
+			return ""
+		}
+		return stripPort(u.Host)
+	}
+	// Bare form. Reject anything with a path or scp-style separator, and
+	// require a dotted name so a local dir like "." or "repo" is never read
+	// as a host.
+	if strings.ContainsAny(s, "/@") || !strings.Contains(s, ".") ||
+		strings.HasPrefix(s, ".") || strings.HasSuffix(s, ".") {
+		return ""
+	}
+	return stripPort(s)
+}
+
+// remoteHost returns the port-stripped host of a key from normalizeRemote
+// ("git.example.com:7999/o/r" -> "git.example.com").
+func remoteHost(key string) string {
+	host, _, _ := strings.Cut(key, "/")
+	return stripPort(host)
+}
+
+// stripPort drops a trailing :port and any IPv6 brackets, leaving a bare host
+// untouched.
+func stripPort(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return strings.Trim(host, "[]")
 }
 
 // normalizeRemote reduces a git remote URL to a scheme/credential/suffix-
