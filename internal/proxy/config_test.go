@@ -146,3 +146,59 @@ func TestParseMCPClientConfigV2(t *testing.T) {
 		t.Error("empty config parse: want error, got nil")
 	}
 }
+
+func TestLoadFoldsDeprecatedToolFilter(t *testing.T) {
+	p := writeConfig(t, `{
+      "mcpProxy": { "baseURL": "http://localhost:9090", "addr": ":9090", "name": "p", "version": "1.0.0" },
+      "mcpServers": {
+        "old": { "command": "echo", "options": { "toolFilter": { "mode": "block", "list": ["rm"] } } },
+        "new": { "command": "echo", "options": {
+          "toolFilter": { "mode": "block", "list": ["ignored"] },
+          "filter": { "tools": { "mode": "allow", "list": ["keep"] } }
+        } }
+      }
+    }`)
+	cfg, err := load(p, false, false, "", 10)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	old := cfg.McpServers["old"].Options
+	if old.ToolFilter != nil {
+		t.Error("deprecated toolFilter not cleared")
+	}
+	if old.Filter == nil || old.Filter.Tools == nil || old.Filter.Tools.Mode != FilterModeBlock {
+		t.Fatalf("toolFilter not folded into filter.tools: %+v", old.Filter)
+	}
+	// An explicit filter.tools wins over the deprecated field.
+	got := cfg.McpServers["new"].Options.Filter.Tools
+	if got.Mode != FilterModeAllow || len(got.List) != 1 || got.List[0] != "keep" {
+		t.Errorf("explicit filter.tools overridden by toolFilter: %+v", got)
+	}
+}
+
+func TestLoadInheritsProxyFilter(t *testing.T) {
+	p := writeConfig(t, `{
+      "mcpProxy": {
+        "baseURL": "http://localhost:9090", "addr": ":9090", "name": "p", "version": "1.0.0",
+        "options": { "filter": { "prompts": { "mode": "block", "list": ["*"] } } }
+      },
+      "mcpServers": {
+        "inherits": { "command": "echo" },
+        "overrides": { "command": "echo", "options": { "filter": { "tools": { "mode": "allow", "list": ["x"] } } } }
+      }
+    }`)
+	cfg, err := load(p, false, false, "", 10)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	inh := cfg.McpServers["inherits"].Options.Filter
+	if inh == nil || inh.Prompts == nil || inh.Prompts.Mode != FilterModeBlock {
+		t.Fatalf("proxy-level filter not inherited: %+v", inh)
+	}
+	// Inheritance is whole-object, not per kind: an upstream that sets filter
+	// keeps only its own.
+	ovr := cfg.McpServers["overrides"].Options.Filter
+	if ovr.Prompts != nil {
+		t.Errorf("filter merged per kind, want whole-object replace: %+v", ovr)
+	}
+}

@@ -108,3 +108,20 @@ func adaptMCPClientConfigV1ToV2(conf *FullConfig) {
 	conf.DeprecatedServerV1 = nil
 	conf.DeprecatedClientsV1 = nil
 }
+
+// normalizeFilter folds the deprecated options.toolFilter into filter.tools so
+// the rest of the proxy only ever reads Filter. An explicit filter.tools wins;
+// the old field is cleared, keeping one canonical representation for reload's
+// deep-equal comparison.
+func (o *OptionsV2) normalizeFilter() {
+	if o == nil || o.ToolFilter == nil {
+		return
+	}
+	if o.Filter == nil {
+		o.Filter = &FilterConfig{}
+	}
+	if o.Filter.Tools == nil {
+		o.Filter.Tools = o.ToolFilter
+	}
+	o.ToolFilter = nil
+}

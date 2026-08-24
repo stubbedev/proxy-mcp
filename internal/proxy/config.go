@@ -51,11 +51,11 @@ const (
 
 // ---- V2 ----
 
-type ToolFilterMode string
+type FilterMode string
 
 const (
-	ToolFilterModeAllow ToolFilterMode = "allow"
-	ToolFilterModeBlock ToolFilterMode = "block"
+	FilterModeAllow FilterMode = "allow"
+	FilterModeBlock FilterMode = "block"
 )
 
 // ConnMode selects how an upstream's connection is shared across downstream
@@ -68,11 +68,32 @@ const (
 	ConnModeShared     ConnMode = "shared"
 )
 
-type ToolFilterConfig struct {
-	// Mode is "allow" (expose only listed tools) or "block" (hide listed tools).
-	Mode ToolFilterMode `json:"mode,omitempty"`
-	// List is the tool names the mode applies to.
+// FilterRule allow- or block-lists one kind of upstream capability. Entries are
+// glob patterns: "*" matches any run of characters, "?" exactly one, and
+// anything else is a literal, so "jira_*" covers a whole family and a bare name
+// still matches only itself.
+type FilterRule struct {
+	// Mode is "allow" (expose only matching entries) or "block" (hide them).
+	Mode FilterMode `json:"mode,omitempty"`
+	// List is the glob patterns the mode applies to. Empty disables the rule
+	// (everything is exposed), whatever the mode.
 	List []string `json:"list,omitempty"`
+}
+
+// FilterConfig gates which of an upstream's capabilities the proxy re-exposes,
+// per kind. Filtering happens at registration: a filtered-out capability is
+// never added to the proxy's server, so it is neither listed nor callable.
+// This is the lever for MCP's context footprint — every tool the proxy drops is
+// a tool schema the downstream model never has to hold.
+type FilterConfig struct {
+	// Tools filters by tool name.
+	Tools *FilterRule `json:"tools,omitempty"`
+	// Prompts filters by prompt name.
+	Prompts *FilterRule `json:"prompts,omitempty"`
+	// Resources filters by resource URI, and resource templates by their URI
+	// template. Patterns match the whole string, "*" crossing "/" and ":", so
+	// "file:///etc/*" works as written.
+	Resources *FilterRule `json:"resources,omitempty"`
 }
 
 type OptionsV2 struct {
@@ -84,8 +105,13 @@ type OptionsV2 struct {
 	// AuthTokens are the bearer tokens accepted on this route. Inherited from
 	// mcpProxy.options when unset.
 	AuthTokens []string `json:"authTokens,omitempty"`
-	// ToolFilter optionally allow- or block-lists this upstream's tools.
-	ToolFilter *ToolFilterConfig `json:"toolFilter,omitempty"`
+	// Filter optionally allow- or block-lists this upstream's tools, prompts and
+	// resources. Inherited whole from mcpProxy.options when unset (not merged
+	// per kind).
+	Filter *FilterConfig `json:"filter,omitempty"`
+	// ToolFilter is the deprecated spelling of filter.tools. Still honoured, and
+	// folded into Filter.Tools at load time unless that is set explicitly.
+	ToolFilter *FilterRule `json:"toolFilter,omitempty"`
 	// Disabled skips this upstream entirely (no route, no connection).
 	Disabled bool `json:"disabled,omitempty"`
 	// CallTimeout bounds each forwarded request to this upstream (tool call,
@@ -328,9 +354,14 @@ func load(path string, insecure, expandEnv bool, httpHeaders string, httpTimeout
 	if conf.McpProxy.Options == nil {
 		conf.McpProxy.Options = &OptionsV2{}
 	}
+	conf.McpProxy.Options.normalizeFilter()
 	for _, clientConfig := range conf.McpServers {
 		if clientConfig.Options == nil {
 			clientConfig.Options = &OptionsV2{}
+		}
+		clientConfig.Options.normalizeFilter()
+		if clientConfig.Options.Filter == nil {
+			clientConfig.Options.Filter = conf.McpProxy.Options.Filter
 		}
 		if clientConfig.Options.AuthTokens == nil {
 			clientConfig.Options.AuthTokens = conf.McpProxy.Options.AuthTokens

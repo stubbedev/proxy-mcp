@@ -21,7 +21,7 @@
         "logEnabled": true,
         "callTimeout": "30s",
         "idleTimeout": "5m",
-        "toolFilter": { "mode": "allow", "list": ["fetch"] }
+        "filter": { "tools": { "mode": "allow", "list": ["fetch"] } }
       }
     },
     "github": {
@@ -31,7 +31,10 @@
       "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_TOKEN" },
       "options": {
         "panicIfInvalid": true,
-        "toolFilter": { "mode": "block", "list": ["create_or_update_file"] },
+        "filter": {
+          "tools": { "mode": "block", "list": ["create_or_update_file", "*_delete_*"] },
+          "prompts": { "mode": "block", "list": ["*"] }
+        },
         "repoWhitelist": ["/Users/abs/git/work/backend", "git@github.com:acme/backend.git"]
       }
     },

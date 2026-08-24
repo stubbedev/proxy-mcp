@@ -139,6 +139,13 @@ type upstream struct {
 	callTimeout time.Duration
 	matcher     *repoMatcher // nil unless repoWhitelist is set
 
+	// Capability filters, compiled once from options.filter and applied at
+	// registration, so a filtered-out capability is never added to u.server and
+	// is therefore neither listed nor callable. Never nil.
+	filterTools     filterFn
+	filterPrompts   filterFn
+	filterResources filterFn
+
 	// Lazy lifecycle (idleTimeout > 0). The backend is connected on the first
 	// request and torn down after idleTimeout of silence, then re-connected on
 	// demand. connMu guards the connected/connCancel transition so concurrent
@@ -185,6 +192,10 @@ type sessConn struct {
 }
 
 func newUpstream(name string, proxyCfg *MCPProxyConfigV2, clientCfg *MCPClientConfigV2) *upstream {
+	var fTools, fPrompts, fResources *FilterRule
+	if f := clientCfg.Options.filter(); f != nil {
+		fTools, fPrompts, fResources = f.Tools, f.Prompts, f.Resources
+	}
 	u := &upstream{
 		name:        name,
 		clientCfg:   clientCfg,
@@ -194,6 +205,10 @@ func newUpstream(name string, proxyCfg *MCPProxyConfigV2, clientCfg *MCPClientCo
 		idleTimeout: clientCfg.Options.idleTimeout(),
 		matcher:     newRepoMatcher(name, clientCfg.Options.RepoWhitelist),
 		sessions:    make(map[string]*sessConn),
+
+		filterTools:     compileRule(name, "tools", fTools),
+		filterPrompts:   compileRule(name, "prompts", fPrompts),
+		filterResources: compileRule(name, "resources", fResources),
 	}
 	if u.idleTimeout > 0 {
 		u.lazy = true

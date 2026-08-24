@@ -24,11 +24,19 @@
         "GITHUB_PERSONAL_ACCESS_TOKEN": "<YOUR_TOKEN>"
       },
       "options": {
-        "toolFilter": {
-          "mode": "block",
-          "list": [
-            "create_or_update_file"
-          ]
+        "filter": {
+          "tools": {
+            "mode": "block",
+            "list": [
+              "create_or_update_file"
+            ]
+          },
+          "prompts": {
+            "mode": "block",
+            "list": [
+              "*"
+            ]
+          }
         }
       }
     },

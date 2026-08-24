@@ -65,8 +65,8 @@ func main() {
 			return enumSchema(string(proxy.MCPServerTypeSSE), string(proxy.MCPServerTypeStreamable))
 		case reflect.TypeFor[proxy.MCPClientType]():
 			return enumSchema(string(proxy.MCPClientTypeStdio), string(proxy.MCPClientTypeSSE), string(proxy.MCPClientTypeStreamable))
-		case reflect.TypeFor[proxy.ToolFilterMode]():
-			return enumSchema(string(proxy.ToolFilterModeAllow), string(proxy.ToolFilterModeBlock))
+		case reflect.TypeFor[proxy.FilterMode]():
+			return enumSchema(string(proxy.FilterModeAllow), string(proxy.FilterModeBlock))
 		case reflect.TypeFor[proxy.ConnMode]():
 			return enumSchema(string(proxy.ConnModePerSession), string(proxy.ConnModeShared))
 		case reflect.TypeFor[optional.Field[bool]]():

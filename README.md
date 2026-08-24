@@ -187,11 +187,54 @@ drifts from what the proxy actually accepts — do not edit it by hand.
 | `logEnabled` | bool | `false` | Log requests on this route. Inherited from proxy if unset. |
 | `panicIfInvalid` | bool | `false` | Fail the whole proxy if this upstream can't connect (instead of serving degraded). Inherited from proxy if unset. |
 | `disabled` | bool | `false` | Skip this upstream entirely — no route registered. |
-| `toolFilter` | object | — | `{ "mode": "allow" \| "block", "list": [...] }`. `allow` exposes only listed tools; `block` hides them. |
+| `filter` | object | — | Trim what this upstream re-exposes, per kind: `{ "tools": rule, "prompts": rule, "resources": rule }`. See [Filtering capabilities](#filtering-capabilities). Inherited whole from the proxy default when unset (not merged per kind). |
+| `toolFilter` | object | — | **Deprecated** alias for `filter.tools`; still honoured, and ignored when `filter.tools` is set. |
 | `callTimeout` | duration | `0` | Bounds each forwarded request (tool call, prompt get, resource read, completion) so a hung upstream fails fast. Go duration like `"30s"`; empty/`"0"` disables. |
 | `mode` | enum | `perSession` | `perSession` = one upstream connection per client (full server→client bridging); `shared` = one connection multiplexed across all clients (no server→client bridging). See [Connection modes](#connection-modes). |
 | `repoWhitelist` | string[] | — | Gate this upstream by the client's repo. When set, tools/prompts/resources are listed **only** to a client whose workspace matches an entry; others see empty lists (the upstream still connects). Each entry is a **local dir** (matched worktree-aware via the git common dir, so the repo and all its worktrees match) or a **git remote URL** (matched against the client repo's remotes, normalized across ssh/https and a trailing `.git`). The client repo is read from its MCP `roots` and the `X-Mcp-Roots`/`X-Mcp-Cwd` headers; a client exposing neither matches nothing (**fails closed**). Local matching requires the proxy to share the filesystem with the client. |
 | `idleTimeout` | duration | `0` | Per-upstream lazy mode: backend isn't started at boot but on first request to its route, then torn down after this idle span and revived on the next request. An in-flight call is never torn down under it; a held-open server→client stream doesn't count as activity, so a connected-but-idle client is still reclaimed. Go duration like `"5m"`; empty/`"0"` keeps it eager. Independent of the process-level `--idle-timeout`. |
+
+### Filtering capabilities
+
+MCP's real cost to a client is context: every tool the proxy re-exposes is a
+name, a description and a JSON schema the model has to hold — typically
+100–300 tokens each, so a handful of chatty upstreams can spend tens of
+thousands of tokens before the first prompt. `options.filter` is the lever.
+
+Each kind takes a rule — `{ "mode": "allow" | "block", "list": [...] }`:
+
+- `allow` exposes **only** matching entries, `block` hides them. An unset mode
+  reads as `allow`.
+- An absent rule or an empty `list` exposes everything of that kind, so you can
+  add rules one kind at a time.
+- Entries are globs: `*` matches any run of characters, `?` exactly one, and
+  anything else is literal. Patterns are anchored — they match the whole name.
+  Unlike shell globs, `*` crosses `/` and `:`, so `file:///etc/*` works as
+  written.
+- `tools` and `prompts` match by name; `resources` matches resource URIs **and**
+  resource templates by their URI template.
+
+```json
+"options": {
+  "filter": {
+    "tools":     { "mode": "allow", "list": ["jira_*", "bitbucket_get_*", "get_dev_context"] },
+    "prompts":   { "mode": "block", "list": ["*"] },
+    "resources": { "mode": "block", "list": ["file:///etc/*"] }
+  }
+}
+```
+
+Filtering happens at **registration**: a filtered-out capability is never added
+to the proxy's server, so it is neither listed nor callable, and the cost is
+paid once per connect rather than per request. That also makes it a real
+restriction, not just a listing hint — unlike `repoWhitelist`, which keeps the
+capability registered and only suppresses the listing.
+
+Two limits worth knowing. A resource **template** is matched by its URI
+template, not by the URIs it expands to, so an allowed template covering a
+blocked concrete resource still lets a client read it — block the template too
+if that matters. And a filter is static per upstream: it can't vary by client
+(use `repoWhitelist` for that).
 
 ## Transparency
 

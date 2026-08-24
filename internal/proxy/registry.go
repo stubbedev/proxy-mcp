@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"log"
-	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -29,7 +28,6 @@ func (u *upstream) registerCapabilities(ctx context.Context) {
 }
 
 func (u *upstream) registerTools(ctx context.Context, cs *mcp.ClientSession) {
-	filter := u.toolFilter()
 	var names []string
 	added := false
 	for tool, err := range cs.Tools(ctx, nil) {
@@ -37,7 +35,7 @@ func (u *upstream) registerTools(ctx context.Context, cs *mcp.ClientSession) {
 			log.Printf("<%s> Skipping tools: %v", u.name, err)
 			return // upstream lacks tools (or transient) — leave existing set intact
 		}
-		if !filter(tool.Name) {
+		if !u.filterTools(tool.Name) {
 			continue
 		}
 		u.server.AddTool(tool, u.toolHandler)
@@ -60,6 +58,9 @@ func (u *upstream) registerPrompts(ctx context.Context, cs *mcp.ClientSession) {
 			log.Printf("<%s> Skipping prompts: %v", u.name, err)
 			return
 		}
+		if !u.filterPrompts(prompt.Name) {
+			continue
+		}
 		u.server.AddPrompt(prompt, u.promptHandler)
 		names = append(names, prompt.Name)
 	}
@@ -75,6 +76,9 @@ func (u *upstream) registerResources(ctx context.Context, cs *mcp.ClientSession)
 		if err != nil {
 			log.Printf("<%s> Skipping resources: %v", u.name, err)
 			return
+		}
+		if !u.filterResources(resource.URI) {
+			continue
 		}
 		u.server.AddResource(resource, u.resourceHandler)
 		uris = append(uris, resource.URI)
@@ -92,6 +96,13 @@ func (u *upstream) registerResourceTemplates(ctx context.Context, cs *mcp.Client
 			log.Printf("<%s> Skipping resource templates: %v", u.name, err)
 			return
 		}
+		// ponytail: a template is matched by its URI template, not by the URIs it
+		// expands to, so an allowed template that covers a blocked concrete
+		// resource still lets a client read it. Block the template too if that
+		// matters; per-URI expansion checking is not worth the machinery.
+		if !u.filterResources(tmpl.URITemplate) {
+			continue
+		}
 		u.server.AddResourceTemplate(tmpl, u.resourceHandler)
 		uris = append(uris, tmpl.URITemplate)
 	}
@@ -99,26 +110,6 @@ func (u *upstream) registerResourceTemplates(ctx context.Context, cs *mcp.Client
 		u.server.RemoveResourceTemplates(stale...)
 	}
 	u.regResourceTmpls = uris
-}
-
-// toolFilter returns a predicate applying the configured allow/block list.
-func (u *upstream) toolFilter() func(string) bool {
-	o := u.clientCfg.Options
-	if o == nil || o.ToolFilter == nil || len(o.ToolFilter.List) == 0 {
-		return func(string) bool { return true }
-	}
-	set := make(map[string]struct{}, len(o.ToolFilter.List))
-	for _, n := range o.ToolFilter.List {
-		set[n] = struct{}{}
-	}
-	block := ToolFilterMode(strings.ToLower(string(o.ToolFilter.Mode))) == ToolFilterModeBlock
-	return func(name string) bool {
-		_, in := set[name]
-		if block {
-			return !in
-		}
-		return in
-	}
 }
 
 // close tears down the template and every per-session connection.

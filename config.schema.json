@@ -2,6 +2,47 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/stubbedev/proxy-mcp/master/config.schema.json",
   "$defs": {
+    "FilterConfig": {
+      "properties": {
+        "tools": {
+          "$ref": "#/$defs/FilterRule",
+          "description": "Tools filters by tool name."
+        },
+        "prompts": {
+          "$ref": "#/$defs/FilterRule",
+          "description": "Prompts filters by prompt name."
+        },
+        "resources": {
+          "$ref": "#/$defs/FilterRule",
+          "description": "Resources filters by resource URI, and resource templates by their URI\ntemplate. Patterns match the whole string, \"*\" crossing \"/\" and \":\", so\n\"file:///etc/*\" works as written."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "FilterConfig gates which of an upstream's capabilities the proxy re-exposes, per kind."
+    },
+    "FilterRule": {
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "block"
+          ],
+          "description": "Mode is \"allow\" (expose only matching entries) or \"block\" (hide them)."
+        },
+        "list": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "List is the glob patterns the mode applies to. Empty disables the rule\n(everything is exposed), whatever the mode."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "FilterRule allow- or block-lists one kind of upstream capability."
+    },
     "MCPClientConfigV2": {
       "properties": {
         "transportType": {
@@ -104,9 +145,13 @@
           "type": "array",
           "description": "AuthTokens are the bearer tokens accepted on this route. Inherited from\nmcpProxy.options when unset."
         },
+        "filter": {
+          "$ref": "#/$defs/FilterConfig",
+          "description": "Filter optionally allow- or block-lists this upstream's tools, prompts and\nresources. Inherited whole from mcpProxy.options when unset (not merged\nper kind)."
+        },
         "toolFilter": {
-          "$ref": "#/$defs/ToolFilterConfig",
-          "description": "ToolFilter optionally allow- or block-lists this upstream's tools."
+          "$ref": "#/$defs/FilterRule",
+          "description": "ToolFilter is the deprecated spelling of filter.tools. Still honoured, and\nfolded into Filter.Tools at load time unless that is set explicitly."
         },
         "disabled": {
           "type": "boolean",
@@ -134,27 +179,6 @@
           },
           "type": "array",
           "description": "RepoWhitelist gates this upstream's advertised capabilities by the\ndownstream client's repository. When non-empty, tools/prompts/resources\nare only listed to a client whose workspace resolves to one of these\nrepos; other clients see an empty list (the upstream still connects).\nEach entry is either a local directory (matched worktree-aware via the\ngit common dir, so the repo and every worktree of it match) or a git\nremote URL (matched against the client repo's remotes, normalized across\nssh/https and a trailing \".git\"). A client that exposes no workspace\nsignal (no roots, no header) matches nothing — gating fails closed."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "ToolFilterConfig": {
-      "properties": {
-        "mode": {
-          "type": "string",
-          "enum": [
-            "allow",
-            "block"
-          ],
-          "description": "Mode is \"allow\" (expose only listed tools) or \"block\" (hide listed tools)."
-        },
-        "list": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "List is the tool names the mode applies to."
         }
       },
       "additionalProperties": false,
