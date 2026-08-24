@@ -68,8 +68,12 @@ func newRepoMatcher(name string, entries []string) *repoMatcher {
 		}
 		log.Printf("<%s> repoWhitelist entry %q is neither a git repo, a remote URL nor a git host; ignoring", name, e)
 	}
+	// A configured whitelist whose entries all turned out unusable — empty
+	// strings from an unexpanded ${VAR}, a path that is not a repo — must gate
+	// EVERYTHING off, not silently un-gate the upstream. Returning nil here
+	// would make an operator's missing secret read as "no whitelist".
 	if len(m.commonDirs) == 0 && len(m.remotes) == 0 && len(m.hosts) == 0 {
-		return nil
+		log.Printf("<%s> repoWhitelist has %d entries but none resolved; gating all clients out", name, len(entries))
 	}
 	return m
 }

@@ -179,6 +179,31 @@ func TestMatcherHostWhitelist(t *testing.T) {
 	}
 }
 
+// TestMatcherUnresolvableWhitelistFailsClosed: a whitelist configured but
+// unusable (an unexpanded ${VAR} collapsing to "", a path that is not a repo)
+// must hide the upstream from everyone. Returning no matcher would read as "no
+// whitelist configured" and expose the tools to every repo — the exact opposite
+// of what the operator asked for, triggered by a missing secret.
+func TestMatcherUnresolvableWhitelistFailsClosed(t *testing.T) {
+	for _, entries := range [][]string{
+		{""},
+		{"", "  "},
+		{"/definitely/not/a/repo/anywhere"},
+	} {
+		m := newRepoMatcher("t", entries)
+		if m == nil {
+			t.Fatalf("newRepoMatcher(%q) = nil; an unusable whitelist must fail closed", entries)
+		}
+		if m.matches(context.Background(), []string{t.TempDir()}) {
+			t.Errorf("newRepoMatcher(%q) matched a repo", entries)
+		}
+	}
+	// An absent whitelist still means no gating at all.
+	if m := newRepoMatcher("t", nil); m != nil {
+		t.Error("no whitelist should yield no matcher")
+	}
+}
+
 // TestClientRepoDirsHeaders pins the header path of the repo gate. It is the
 // only path left once a client negotiates MCP >= 2026-07-28, where roots/list
 // can no longer be asked for — and because the gate fails closed, a header the
