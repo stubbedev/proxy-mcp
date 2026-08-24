@@ -9,6 +9,18 @@ default:
 
 # ─────────────────────────── Build & Test ───────────────────────────
 
+# Never link against libc. Every `go` invocation below inherits this, so the
+# binaries these recipes produce are fully static and run anywhere — including
+# on a host with no dynamic loader at /lib64/ld-linux (NixOS outside the
+# devshell), where a cgo-linked `go test` binary fails to exec with a
+# misleading "no such file or directory".
+#
+# The only cgo in the tree is darwin's launchd socket activation
+# (launch_activate_socket), and it sits behind `//go:build darwin && cgo` with
+# a no-op fallback, so dropping cgo costs nothing here. Turning it back on for
+# release artifacts is release.yml's business, not a local recipe's.
+export CGO_ENABLED := "0"
+
 # Version baked into the binary at link time.
 GO_LDFLAGS := "-X main.BuildVersion=$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 

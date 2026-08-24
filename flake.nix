@@ -23,6 +23,12 @@
         # build` prints the expected hash on mismatch.
         # go-sum: 46914f0ce25648ba8deda54bdb16927f17c7ccd2f40f4fb3a4e861cb56a8396f
         vendorHash = "sha256-dOHO7AdPifpQulfXbH5iVkxXoNVkqtssq8rhDrtoEYE=";
+        # Static on Linux: buildGoModule defaults CGO_ENABLED=1, which links the
+        # binary against glibc and ties it to this store path's loader. Darwin
+        # keeps cgo — launchd socket activation needs launch_activate_socket,
+        # and a darwin Go binary always links libSystem dynamically anyway, so
+        # dropping cgo there costs the feature and buys no static linkage.
+        env.CGO_ENABLED = if pkgs.stdenv.hostPlatform.isDarwin then "1" else "0";
         ldflags = [
           "-s"
           "-w"
