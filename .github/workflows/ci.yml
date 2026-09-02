@@ -143,13 +143,17 @@ jobs:
           fi
           echo "sync-flake: vendorHash=$NEW_HASH go-sum=$GO_SUM_HASH"
 
-      - name: assert flake.nix in sync (PR)
+      # Drift is reported, not fatal. Dependabot PRs get a read-only token, so
+      # nothing can push the corrected hash onto the PR branch — failing here
+      # just parks every dep bump until someone runs `just sync-flake` by hand.
+      # The steps below build and flake-check the corrected tree, and the master
+      # push after merge auto-commits the hash (next step).
+      - name: report flake.nix drift (PR)
         if: github.event_name == 'pull_request'
         run: |
           if [ -n "$(git status --porcelain flake.nix)" ]; then
-            echo "::error::flake.nix vendorHash is out of sync with go.sum. Run 'just sync-flake' locally and commit the result."
+            echo "::warning::flake.nix vendorHash was stale; this run built with the corrected hash, which is auto-committed on the master push after merge."
             git --no-pager diff flake.nix
-            exit 1
           fi
 
       - name: auto-commit flake.nix bump (master)
