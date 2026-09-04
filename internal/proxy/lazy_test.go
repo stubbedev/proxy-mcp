@@ -118,3 +118,45 @@ func TestSessionForReportsUnavailable(t *testing.T) {
 		t.Fatal("sessionFor returned nil error for a disconnected upstream")
 	}
 }
+
+// TestLazyGETStreamDoesNotSpawnBackend covers the SSE half of the leak: a client
+// opening (or re-opening) its server→client GET stream must not start a backend.
+// Connecting on GET re-spawned the process on every reconnect right after idle
+// teardown had retired it, so a client that never called a tool still pinned it.
+func TestLazyGETStreamDoesNotSpawnBackend(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var hits atomic.Int32
+	srv := mcp.NewServer(&mcp.Implementation{Name: "up", Version: "1.0.0"}, nil)
+	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	upHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(upHTTP.Close)
+
+	cfg := streamableCfg(upHTTP.URL)
+	cfg.Options.IdleTimeout = "300ms"
+	up := newUpstream("up", &MCPProxyConfigV2{Name: "p", Version: "1.0.0", Type: MCPServerTypeStreamable}, cfg)
+	t.Cleanup(up.close)
+
+	var served atomic.Int32
+	m := &proxyManager{}
+	handler := m.lazyConnectHandler(ctx, up,
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { served.Add(1) }))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/up/mcp", nil))
+	if served.Load() != 1 {
+		t.Fatal("GET was not passed through to the local mcp server")
+	}
+	if up.template() != nil || hits.Load() != 0 {
+		t.Fatalf("GET stream spawned the backend (hits=%d)", hits.Load())
+	}
+
+	// A real call still connects on demand.
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/up/mcp", nil))
+	if up.template() == nil || hits.Load() == 0 {
+		t.Fatalf("POST did not connect the backend (hits=%d)", hits.Load())
+	}
+}

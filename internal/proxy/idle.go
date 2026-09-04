@@ -56,16 +56,17 @@ func (t *activityTracker) busy() bool { return t.inflight.Load() > 0 }
 // Placed outermost in the chain so any contact with a mounted server counts,
 // including requests later rejected by auth.
 //
-// Long-lived GET streams (the server→client SSE channel) are touched but NOT
-// counted as in-flight: a client can hold that stream open indefinitely while
-// doing nothing, and counting it would pin the backend forever and defeat idle
-// teardown. Request/response traffic (POST/DELETE/…) IS counted, so an active
-// call can never have its backend cancelled out from under it.
+// Long-lived GET streams (the server→client SSE channel) are ignored entirely —
+// neither touched nor counted as in-flight. A client can hold that stream open
+// while doing nothing, and clients re-open it on a timer; touching on GET meant
+// a reconnect cadence at or under idleTimeout reset the clock forever, so a
+// backend nobody was calling never retired. Request/response traffic
+// (POST/DELETE/…) IS counted, so an active call can never have its backend
+// cancelled out from under it.
 func (t *activityTracker) middleware() MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet {
-				t.touch()
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -303,10 +303,18 @@ func (m *proxyManager) middlewares(name string, cfg *MCPClientConfigV2, up *upst
 // route only — siblings are untouched.
 func (m *proxyManager) lazyConnectHandler(ctx context.Context, up *upstream, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if err := up.ensureConnected(ctx); err != nil {
-			log.Printf("<%s> on-demand connect failed: %v", up.name, err)
-			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-			return
+		// A bare GET is the client opening its server→client SSE channel, not a
+		// call. The local mcp.Server serves it fine with no backend behind it
+		// (there is nothing to push until something connects), so starting one
+		// here only burns memory for a client that may never call a tool — and
+		// since clients re-open the stream on a timer, it re-spawned the backend
+		// on every reconnect right after idle teardown retired it.
+		if req.Method != http.MethodGet {
+			if err := up.ensureConnected(ctx); err != nil {
+				log.Printf("<%s> on-demand connect failed: %v", up.name, err)
+				http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		next.ServeHTTP(w, req)
 	})

@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -76,5 +78,48 @@ func TestMonitorIdleDisabled(t *testing.T) {
 	case <-fired:
 		t.Fatal("idle monitor fired with idleTimeout=0 (should be disabled)")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestMiddlewareIgnoresGETStreams covers the SSE-reconnect leak: clients re-open
+// the server→client GET stream on a timer, so touching on GET let a reconnect
+// cadence at or under idleTimeout hold a backend nobody was calling alive
+// forever. GET must not reset the clock; POST must.
+func TestMiddlewareIgnoresGETStreams(t *testing.T) {
+	for _, tc := range []struct {
+		method    string
+		wantFired bool
+	}{
+		{http.MethodGet, true},
+		{http.MethodPost, false},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			tr := newActivityTracker()
+			h := tr.middleware()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+			fired := make(chan struct{})
+			tr.monitorIdle(t.Context(), 200*time.Millisecond, func() { close(fired) })
+
+			// Hit the route faster than the timeout for longer than the timeout.
+			tick := time.NewTicker(50 * time.Millisecond)
+			defer tick.Stop()
+			done := time.After(700 * time.Millisecond)
+			for done != nil {
+				select {
+				case <-fired:
+					if !tc.wantFired {
+						t.Fatalf("idle monitor fired while %s traffic was active", tc.method)
+					}
+					return
+				case <-tick.C:
+					h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(tc.method, "/x/mcp", nil))
+				case <-done:
+					done = nil
+				}
+			}
+			if tc.wantFired {
+				t.Fatalf("idle monitor never fired though only %s traffic arrived", tc.method)
+			}
+		})
 	}
 }
