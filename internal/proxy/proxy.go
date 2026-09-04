@@ -215,7 +215,13 @@ func newUpstream(name string, proxyCfg *MCPProxyConfigV2, clientCfg *MCPClientCo
 		u.activity = newActivityTracker()
 	}
 	u.server = mcp.NewServer(u.info, &mcp.ServerOptions{
-		HasTools:                true,
+		// Spelled out rather than the deprecated HasTools: a non-nil
+		// Capabilities REPLACES the SDK's {"logging":{}} default instead of
+		// augmenting it, and this server relays logging/setLevel upstream.
+		Capabilities: &mcp.ServerCapabilities{
+			Logging: &mcp.LoggingCapabilities{},
+			Tools:   &mcp.ToolCapabilities{ListChanged: true},
+		},
 		CompletionHandler:       u.handleComplete,
 		SubscribeHandler:        u.handleSubscribe,
 		UnsubscribeHandler:      u.handleUnsubscribe,

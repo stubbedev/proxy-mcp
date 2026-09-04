@@ -237,7 +237,10 @@ func TestProxyForwardsInstructions(t *testing.T) {
 
 	const want = "Preferred shell for this session."
 	srv := mcp.NewServer(&mcp.Implementation{Name: "up", Version: "1.0.0"}, &mcp.ServerOptions{
-		HasTools:     true,
+		Capabilities: &mcp.ServerCapabilities{
+			Logging: &mcp.LoggingCapabilities{},
+			Tools:   &mcp.ToolCapabilities{ListChanged: true},
+		},
 		Instructions: want,
 	})
 	s := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil))
