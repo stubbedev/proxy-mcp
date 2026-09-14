@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Dispatched by dependabot-auto-merge.yml after a squash merge: pushes made
+  # with GITHUB_TOKEN do not trigger `push`, so the vendorHash auto-commit
+  # below would never run for an auto-merged dep bump.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -57,7 +61,7 @@ jobs:
             exit 1
           fi
       - name: auto-commit schema (master)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: |
           if [ -z "$(git status --porcelain config.schema.json)" ]; then
             echo "schema already in sync; nothing to commit."
@@ -160,12 +164,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           if [ -n "$(git status --porcelain flake.nix)" ]; then
-            echo "::warning::flake.nix vendorHash was stale; this run built with the corrected hash, which is auto-committed on the master push after merge."
+            echo "::warning::flake.nix vendorHash was stale; this run built with the corrected hash, which is auto-committed by the CI run dispatched after merge."
             git --no-pager diff flake.nix
           fi
 
       - name: auto-commit flake.nix bump (master)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: |
           if [ -z "$(git status --porcelain flake.nix)" ]; then
             echo "flake.nix already in sync; nothing to commit."
@@ -186,7 +190,7 @@ jobs:
       # leave every consumer rebuilding from source, so the step fails the
       # job.
       - name: setup xilo (master)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         uses: stubbedev/xilo@v1
         with:
           url: https://nix.stubbe.dev
@@ -194,7 +198,7 @@ jobs:
           token: ${{ secrets.XILO_TOKEN }}
 
       - name: push nix build to xilo (master)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: |
           OUT=$(nix build .#proxy-mcp --no-link --print-out-paths)
           xilo push default $OUT
