@@ -49,6 +49,17 @@ jobs:
               *)          echo "#$pr: no passing checks ($buckets) — refusing to merge blind"; continue ;;
             esac
 
+            # GITHUB_TOKEN cannot merge a PR that modifies files under
+            # .github/workflows/ (GitHub rejects it without an app-level
+            # workflows permission), so those bumps stay for a human.
+            files=$(gh api "repos/${GH_REPO}/pulls/$pr/files" --paginate --jq '[.[].filename] | join(" ")')
+            case "$files" in
+              *".github/workflows/"*)
+                echo "#$pr: touches workflow files — leaving for a human"
+                continue
+                ;;
+            esac
+
             if [ "$mergeable" != "MERGEABLE" ]; then
               echo "#$pr: not mergeable ($mergeable)"
               continue
