@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
         with:
           # Substitute from the self-hosted xilo cache. This must be set at
           # install time: the `xilo use` step later in the job rewrites nix.conf
