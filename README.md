@@ -18,7 +18,7 @@ brew tap stubbedev/tap
 brew install stubbedev/tap/proxy-mcp
 ```
 
-This taps `stubbedev/homebrew-proxy-mcp` and installs the prebuilt binary for
+This taps `stubbedev/homebrew-tap` and installs the prebuilt binary for
 your platform (Apple Silicon + Intel macOS, arm64 + amd64 Linux). Upgrade with
 `brew upgrade proxy-mcp`. Each release tag bumps the tap automatically.
 
