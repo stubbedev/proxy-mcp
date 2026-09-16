@@ -14,6 +14,7 @@ registered.
 ### Homebrew (macOS / Linux)
 
 ```sh
+brew tap stubbedev/tap
 brew install stubbedev/tap/proxy-mcp
 ```
 
