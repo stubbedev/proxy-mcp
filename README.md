@@ -14,7 +14,7 @@ registered.
 ### Homebrew (macOS / Linux)
 
 ```sh
-brew install stubbedev/proxy-mcp/proxy-mcp
+brew install stubbedev/tap/proxy-mcp
 ```
 
 This taps `stubbedev/homebrew-proxy-mcp` and installs the prebuilt binary for
