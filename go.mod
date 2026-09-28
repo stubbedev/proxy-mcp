@@ -1,9 +1,9 @@
 module github.com/stubbedev/proxy-mcp
 
-go 1.26.3
+go 1.26.8
 
 require (
-	github.com/go-sphere/confstore v0.0.4
+	github.com/go-sphere/confstore v0.0.5
 	github.com/invopop/jsonschema v0.14.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/spf13/pflag v1.0.10
