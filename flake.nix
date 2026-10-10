@@ -12,7 +12,7 @@
       # there's a single source of truth for pname/version/vendorHash/ldflags.
       # `just sync-flake` (and CI) rewrite the version + vendorHash lines below
       # by regex, so keep them on their own lines.
-      mkProxyMcp = pkgs: pkgs.buildGoModule {
+      mkProxyMcp = pkgs: pkgs.buildGo127Module {
         pname = "proxy-mcp";
         version = "0.0.24";
         src = ./.;
@@ -64,7 +64,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            go
+            go_1_27
             gopls
             golangci-lint
             just
