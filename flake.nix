@@ -3,86 +3,23 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-parts = {
+      url = "github:hercules-ci/flake-parts";
+      inputs.nixpkgs-lib.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    let
-      # Package builder, shared by the per-system packages and the overlay so
-      # there's a single source of truth for pname/version/vendorHash/ldflags.
-      # `just sync-flake` (and CI) rewrite the version + vendorHash lines below
-      # by regex, so keep them on their own lines.
-      mkProxyMcp = pkgs: pkgs.buildGo127Module {
-        pname = "proxy-mcp";
-        version = "0.0.24";
-        src = ./.;
-        # buildGoModule fetches Go deps through the module proxy and hashes the
-        # resulting vendor tree; `vendorHash` pins that hash so the sandboxed
-        # build is reproducible. Bump after any `go get` / `go mod tidy` that
-        # changes go.sum — `just sync-flake` (and CI) regenerates it; `nix
-        # build` prints the expected hash on mismatch.
-        # go-sum: d99db3318553b4efc06da6a26141336f878540ce88a45f49303c842782b5a7da
-        vendorHash = "sha256-UWDRoZdrqRDaaqU7/M2KbF96pHVT6yhwfr1cK7BKBEU=";
-        # Static on Linux: buildGoModule defaults CGO_ENABLED=1, which links the
-        # binary against glibc and ties it to this store path's loader. Darwin
-        # keeps cgo — launchd socket activation needs launch_activate_socket,
-        # and a darwin Go binary always links libSystem dynamically anyway, so
-        # dropping cgo there costs the feature and buys no static linkage.
-        env.CGO_ENABLED = if pkgs.stdenv.hostPlatform.isDarwin then "1" else "0";
-        ldflags = [
-          "-s"
-          "-w"
-          "-X main.BuildVersion=0.0.24"
-        ];
-        doCheck = true;
-        meta = {
-          description = "Aggregating MCP proxy with a real readiness gate";
-          homepage = "https://github.com/stubbedev/proxy-mcp";
-          license = nixpkgs.lib.licenses.mit;
-          mainProgram = "proxy-mcp";
-        };
-      };
-    in
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-        proxy-mcp = mkProxyMcp pkgs;
-      in
-      {
-        packages = {
-          default = proxy-mcp;
-          proxy-mcp = proxy-mcp;
-        };
-
-        apps.default = {
-          type = "app";
-          program = "${proxy-mcp}/bin/proxy-mcp";
-          meta.description = "Aggregating MCP proxy with a real readiness gate";
-        };
-
-        checks.build = proxy-mcp;
-
-        devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            go_1_27
-            gopls
-            golangci-lint
-            just
-            git
-          ];
-          shellHook = ''
-            echo "proxy-mcp dev shell — \`just build\` to compile, \`just test\` to test"
-          '';
-        };
-
-        formatter = pkgs.nixpkgs-fmt;
-      })
-    // {
-      # System-independent outputs. The overlay adds `proxy-mcp` to a pkgs set;
-      # the modules wire a Type=notify systemd service that consumes the proxy's
-      # sd_notify readiness gate (and optional watchdog).
-      overlays.default = final: _prev: { proxy-mcp = mkProxyMcp final; };
-      nixosModules.default = import ./nix/module.nix { inherit self; isHome = false; };
-      homeModules.default = import ./nix/module.nix { inherit self; isHome = true; };
+  outputs = inputs @ { flake-parts, ... }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
+      imports = [
+        ./nix/package.nix
+        ./nix/shell.nix
+        ./nix/module.nix
+      ];
     };
 }
