@@ -19,7 +19,7 @@ brew install stubbedev/tap/proxy-mcp
 ```
 
 This taps `stubbedev/homebrew-tap` and installs the prebuilt binary for
-your platform (Apple Silicon + Intel macOS, arm64 + amd64 Linux). Upgrade with
+your platform (Apple Silicon macOS, arm64 + amd64 Linux). Upgrade with
 `brew upgrade proxy-mcp`. Each release tag bumps the tap automatically.
 
 The formula ships a `brew services` definition, so you can run one always-on
@@ -30,7 +30,7 @@ instance shared by every MCP client on the machine — see
 
 Grab a tarball for your OS/arch from the
 [latest release](https://github.com/stubbedev/proxy-mcp/releases/latest)
-(`darwin`/`linux` × `arm64`/`amd64`), verify its `.sha256`, and drop the
+(`darwin-arm64`, `linux-arm64`, `linux-amd64`), verify its `.sha256`, and drop the
 `proxy-mcp` binary on your `PATH`.
 
 ### Go
@@ -486,6 +486,6 @@ just release-preview         # show next major/minor/patch tags
 just release-patch           # bump, sync flake, tag, push -> CI builds + publishes
 ```
 
-Tagging `v*.*.*` triggers CI to cross-build linux/darwin × amd64/arm64,
+Tagging `v*.*.*` triggers CI to cross-build linux amd64/arm64 and darwin arm64,
 publish a GitHub release, push the nix closure to `nix.stubbe.dev`, and bump
 the Homebrew tap.
