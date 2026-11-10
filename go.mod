@@ -8,7 +8,7 @@ require (
 	github.com/go-sphere/confstore v0.0.5
 	github.com/invopop/jsonschema v0.14.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/tbxark/optional-go v0.0.2
 	golang.org/x/sync v0.24.0
 )
