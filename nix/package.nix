@@ -1,9 +1,10 @@
+{ inputs, ... }:
 let
   # Package builder, shared by the per-system packages and the overlay so
   # there's a single source of truth for pname/version/vendorHash/ldflags.
   # `just sync-flake` (and CI) rewrite the version + vendorHash lines below
   # by regex, so keep them on their own lines.
-  mkProxyMcp = pkgs: pkgs.buildGo127Module {
+  mkProxyMcp = pkgs: (pkgs.buildGoModule.override { go = inputs.devtools.packages.${pkgs.stdenv.hostPlatform.system}.go; }) {
     pname = "proxy-mcp";
     version = "0.0.24";
     src = pkgs.lib.fileset.toSource {
