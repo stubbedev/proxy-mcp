@@ -6,7 +6,7 @@ let
   # by regex, so keep them on their own lines.
   mkProxyMcp = pkgs: (pkgs.buildGoModule.override { go = inputs.devtools.packages.${pkgs.stdenv.hostPlatform.system}.go; }) {
     pname = "proxy-mcp";
-    version = "0.0.24";
+    version = "0.0.25";
     src = pkgs.lib.fileset.toSource {
       root = ../.;
       fileset = pkgs.lib.fileset.difference (pkgs.lib.fileset.gitTracked ../.) (
@@ -33,7 +33,7 @@ let
     ldflags = [
       "-s"
       "-w"
-      "-X main.BuildVersion=0.0.24"
+      "-X main.BuildVersion=0.0.25"
     ];
     doCheck = true;
     meta = {
