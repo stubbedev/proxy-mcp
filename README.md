@@ -456,7 +456,7 @@ services.proxy-mcp = {
 
 `homeModules.default` exposes the same `services.proxy-mcp` options as a
 `systemd --user` service. Prebuilt closures are pushed to the
-`nix.stubbe.dev` (`default`) attic cache on every master push + release tag.
+`xilos.dev` (`stubbedev/main`) xilo cache on every master push + release tag.
 
 ## Docker
 
@@ -487,5 +487,5 @@ just release-patch           # bump, sync flake, tag, push -> CI builds + publis
 ```
 
 Tagging `v*.*.*` triggers CI to cross-build linux amd64/arm64 and darwin arm64,
-publish a GitHub release, push the nix closure to `nix.stubbe.dev`, and bump
+publish a GitHub release, push the nix closure to `xilos.dev`, and bump
 the Homebrew tap.
