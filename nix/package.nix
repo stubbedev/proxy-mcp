@@ -22,8 +22,8 @@ let
     # build is reproducible. Bump after any `go get` / `go mod tidy` that
     # changes go.sum — `just sync-flake` (and CI) regenerates it; `nix
     # build` prints the expected hash on mismatch.
-    # go-sum: a610b16be93dc6af1b584beed98eceeea5ab6cd5099b1d8f9961671df4e082ac
-    vendorHash = "sha256-GzyHrKMMFfGZgBihKl0SDk096oKMQEZYy/ACosQYfTE=";
+    # go-sum: f0240477ec1ad4d6f025f861baa4e7f13bcbf38189b55af3a345ef991fc94f4c
+    vendorHash = "sha256-sYWcbfnvP30Hqu7TC8wOQ+3TFCD+XPDt9h1J7jGW//o=";
     # Static on Linux: buildGoModule defaults CGO_ENABLED=1, which links the
     # binary against glibc and ties it to this store path's loader. Darwin
     # keeps cgo — launchd socket activation needs launch_activate_socket,
