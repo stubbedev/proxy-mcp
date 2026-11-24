@@ -5,7 +5,7 @@ go 1.27.0
 toolchain go1.27.4
 
 require (
-	github.com/go-sphere/confstore v0.0.5
+	github.com/go-sphere/confstore v0.0.6
 	github.com/invopop/jsonschema v0.14.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/spf13/pflag v1.1.0
